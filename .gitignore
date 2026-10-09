@@ -16,4 +16,5 @@ logs/
 .aws/
 .agents/
 .codex/
+.sessions/
 .DS_Store

@@ -28,3 +28,10 @@
 ## 本地论文原文
 
 六篇 PDF 已收录于 [papers](papers/)，下载来源与文件校验值见[原文索引](sources.md)。
+
+## 运行时与接入方式
+
+见 [Agent 接入调研](agent-integration.md)，覆盖 DSH、Pi、Hermes 及框架备选。反馈学习方法与运行时选择分开，不因更换 agent 丢失业务证据。
+
+最后修改时间：2026-10-09T19:43:05Z
+模型署名：GPT6astra

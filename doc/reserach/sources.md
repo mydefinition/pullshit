@@ -10,3 +10,10 @@
 | Contextual Bandit | [contextual-bandit-news-2010.pdf](papers/contextual-bandit-news-2010.pdf) | [原始来源](https://arxiv.org/pdf/1003.0146) | `e98ae83073fd959e1e36bdb8bbe81e2e2b6e0a7767d147098fedddcf3deb9da0` |
 | Implicit Feedback | [implicit-feedback-2008.pdf](papers/implicit-feedback-2008.pdf) | [原始来源](https://yifanhu.net/PUB/cf.pdf) | `b482526952f11de82bd906b51a759d8490304e116d108d0d9be9b24bea3c0aed` |
 | Unbiased Learning-to-Rank | [unbiased-learning-to-rank-2017.pdf](papers/unbiased-learning-to-rank-2017.pdf) | [原始来源](https://arxiv.org/pdf/1608.04468) | `b8c78b381df07eb3dec2a26bcf6988e1fc9da86cc5fd5074f9c67fa6c8a8043b` |
+
+## 维护标注范围
+
+本文件的修改时间和模型署名仅指索引维护，不代表论文作者、发表时间或 PDF 已被修改。
+
+最后修改时间：2026-10-09T19:43:05Z
+模型署名：GPT6astra
