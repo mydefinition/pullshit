@@ -1,10 +1,9 @@
 {
-  "schema_version": 1,
   "runtime": {
-    "mode": "receive"
+    "mode": "auto",
+    "tick_seconds": 1
   },
   "napcat": {
-    "transport": "",
     "endpoint": "",
     "access_token_env": "PULLSHIT_NAPCAT_ACCESS_TOKEN",
     "request_timeout_seconds": 15,
@@ -18,49 +17,76 @@
     "routes": []
   },
   "sending": {
-    "enabled": false,
-    "paused": true,
-    "max_probe_messages_per_day": 5
+    "enabled": false
   },
   "storage": {
     "database_path": "",
     "media_directory": "",
-    "raw_event_retention_days": 7,
-    "media_retention_days": 7,
-    "cleanup_interval_seconds": 3600
+    "worker_directory": ""
   },
-  "messages": {
-    "forward_max_depth": 3,
-    "forward_max_nodes": 100
+  "content": {
+    "quiet_seconds": 60,
+    "max_wait_seconds": 300,
+    "max_messages": 500
   },
   "context": {
-    "max_reply_depth": 3,
+    "reply_depth": 3,
+    "forward_depth": 3,
+    "max_nodes": 1000,
     "max_fetch_calls": 5,
-    "total_timeout_seconds": 20,
-    "nearby_messages_each_side": 5,
-    "nearby_window_seconds": 120,
-    "failure_cache_seconds": 60,
-    "max_media_per_query": 5,
-    "max_text_characters": 20000
+    "timeout_seconds": 20
   },
   "media": {
-    "max_download_bytes": 10485760,
+    "max_image_bytes": 10485760,
     "download_timeout_seconds": 15,
-    "allowed_protocols": [
-      "http",
-      "https"
-    ],
-    "allow_private_network": false,
-    "max_redirects": 3
+    "max_redirects": 3,
+    "cache_max_bytes": 2147483648
   },
-  "feedback": {
-    "polling_enabled": false,
-    "max_queries_per_probe": 3
+  "agent": {
+    "python": "",
+    "provider": "",
+    "model": "",
+    "base_url": "",
+    "api_key_env": "PULLSHIT_AGENT_API_KEY",
+    "vision_model": "",
+    "vision_base_url": "",
+    "vision_api_key_env": "PULLSHIT_VISION_API_KEY",
+    "concurrency": 2,
+    "timeout_seconds": 90,
+    "model_calls": 8,
+    "tool_calls": 8,
+    "max_output_tokens": 2048,
+    "max_input_characters": 64000,
+    "daily_budget_usd": 0.0,
+    "task_budget_usd": 0.0,
+    "input_usd_per_million": 0.0,
+    "output_usd_per_million": 0.0,
+    "minimum_score": 0.75
+  },
+  "limits": {
+    "min_interval_seconds": 600,
+    "daily_batches": 20,
+    "daily_nodes": 500,
+    "max_forward_nodes": 100,
+    "max_batch_media_bytes": 20971520,
+    "daily_download_bytes": 1073741824,
+    "daily_publish_bytes": 1073741824
+  },
+  "retention": {
+    "message_days": 3,
+    "content_days": 7,
+    "delivery_days": 90,
+    "budget_days": 30,
+    "log_days": 7,
+    "cleanup_interval_seconds": 3600
+  },
+  "preferences": {
+    "min_publications": 3,
+    "min_members": 3,
+    "max_step": 0.05
   },
   "logging": {
-    "level": "info",
-    "directory": "",
-    "include_raw_payload": false,
-    "retention_days": 7
+    "level": "INFO",
+    "directory": ""
   }
 }

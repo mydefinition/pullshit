@@ -1,7 +1,6 @@
 {
   "napcat": {
-    "transport": "",
-    "endpoint": ""
+    "endpoint": "ws://127.0.0.1:3001/"
   },
   "authorization": {
     "source_group_ids": [],
@@ -9,8 +8,25 @@
     "operator_qq_ids": [],
     "routes": []
   },
-  "sending": {
-    "enabled": false,
-    "paused": true
+  "agent": {
+    "python": "",
+    "provider": "",
+    "model": "",
+    "base_url": "",
+    "api_key_env": "PULLSHIT_AGENT_API_KEY",
+    "vision_model": "",
+    "vision_base_url": "",
+    "vision_api_key_env": "PULLSHIT_VISION_API_KEY",
+    "concurrency": 2,
+    "timeout_seconds": 90,
+    "model_calls": 8,
+    "tool_calls": 8,
+    "max_output_tokens": 2048,
+    "max_input_characters": 64000,
+    "daily_budget_usd": 0.0,
+    "task_budget_usd": 0.0,
+    "input_usd_per_million": 0.0,
+    "output_usd_per_million": 0.0,
+    "minimum_score": 0.75
   }
 }
