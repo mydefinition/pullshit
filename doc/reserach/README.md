@@ -31,7 +31,7 @@
 
 ## 运行时与接入方式
 
-见 [Agent 接入调研](agent-integration.md)，覆盖 DSH、Pi、Hermes 及框架备选。反馈学习方法与运行时选择分开，不因更换 agent 丢失业务证据。
+见 [Agent 接入调研](agent-integration.md)，收录框架参考资料与接入契约；架构约定见[设计文档](../design.md)，开发排期见[开发 TODO](../phase-1-todo.md)。反馈学习方法与运行时选择分开，业务证据由 pullshit 持久保存。
 
-最后修改时间：2026-10-09T19:43:05Z
-模型署名：GPT6astra
+最后修改时间：2026-10-10T07:50:43Z
+模型署名：GPT-6

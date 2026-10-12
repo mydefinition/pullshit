@@ -1,0 +1,14 @@
+{
+  "profile": "development",
+  "napcat": {
+    "access_token_env": "PULLSHIT_DEVELOPMENT_NAPCAT_ACCESS_TOKEN"
+  },
+  "storage": {
+    "database_path": "data/development/pullshit.sqlite3",
+    "media_directory": "data/development/media"
+  },
+  "logging": {
+    "level": "debug",
+    "directory": "logs/development"
+  }
+}

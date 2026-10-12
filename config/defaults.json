@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "runtime": {
+    "mode": "receive"
+  },
+  "napcat": {
+    "transport": "",
+    "endpoint": "",
+    "access_token_env": "PULLSHIT_NAPCAT_ACCESS_TOKEN",
+    "request_timeout_seconds": 15,
+    "reconnect_initial_seconds": 1,
+    "reconnect_max_seconds": 30
+  },
+  "authorization": {
+    "source_group_ids": [],
+    "target_group_ids": [],
+    "operator_qq_ids": [],
+    "routes": []
+  },
+  "sending": {
+    "enabled": false,
+    "paused": true,
+    "max_probe_messages_per_day": 5
+  },
+  "storage": {
+    "database_path": "",
+    "media_directory": "",
+    "raw_event_retention_days": 7,
+    "media_retention_days": 7,
+    "cleanup_interval_seconds": 3600
+  },
+  "messages": {
+    "forward_max_depth": 3,
+    "forward_max_nodes": 100
+  },
+  "context": {
+    "max_reply_depth": 3,
+    "max_fetch_calls": 5,
+    "total_timeout_seconds": 20,
+    "nearby_messages_each_side": 5,
+    "nearby_window_seconds": 120,
+    "failure_cache_seconds": 60,
+    "max_media_per_query": 5,
+    "max_text_characters": 20000
+  },
+  "media": {
+    "max_download_bytes": 10485760,
+    "download_timeout_seconds": 15,
+    "allowed_protocols": [
+      "http",
+      "https"
+    ],
+    "allow_private_network": false,
+    "max_redirects": 3
+  },
+  "feedback": {
+    "polling_enabled": false,
+    "max_queries_per_probe": 3
+  },
+  "logging": {
+    "level": "info",
+    "directory": "",
+    "include_raw_payload": false,
+    "retention_days": 7
+  }
+}

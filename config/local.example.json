@@ -1,0 +1,16 @@
+{
+  "napcat": {
+    "transport": "",
+    "endpoint": ""
+  },
+  "authorization": {
+    "source_group_ids": [],
+    "target_group_ids": [],
+    "operator_qq_ids": [],
+    "routes": []
+  },
+  "sending": {
+    "enabled": false,
+    "paused": true
+  }
+}

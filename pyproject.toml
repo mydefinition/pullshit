@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pullshit"
+version = "0.1.0"
+description = "QQ content curation: P0 transport and replay probes"
+requires-python = ">=3.12"
+dependencies = ["websockets==17.2"]
+
+[project.scripts]
+pullshit = "pullshit.entrypoints.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
