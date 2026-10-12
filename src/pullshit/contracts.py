@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 import hashlib
 import json
+import re
 import time
 from typing import Any, AsyncIterator, Protocol
 
@@ -24,7 +25,7 @@ def platform_id(value: Any, signed: bool = False) -> str:
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         raise ValueError('invalid platform ID')
     text = str(value)
-    if not text or not text.lstrip('-').isdigit() or (text.startswith('-') and not signed):
+    if not re.fullmatch(r'-?\d+' if signed else r'\d+', text) or len(text)>64:
         raise ValueError('invalid platform ID')
     return text
 
@@ -40,7 +41,10 @@ class MessageRef:
 
     @classmethod
     def from_dict(cls, value: dict) -> MessageRef:
-        return cls(platform_id(value['account_id']), platform_id(value['group_id']), platform_id(value['message_id'], True))
+        message_id = value['message_id']
+        if not isinstance(message_id, str) or not re.fullmatch(r'embedded:[0-9a-f]+', message_id):
+            message_id = platform_id(message_id, True)
+        return cls(platform_id(value['account_id']), platform_id(value['group_id']), message_id)
 
 @dataclass
 class ChatMessage:
@@ -98,7 +102,7 @@ class ContentBundle:
 
     @property
     def sources(self) -> list[MessageRef]:
-        return list(dict.fromkeys(message.ref for message in self.messages))
+        return list(dict.fromkeys(message.ref for message in self.messages if not message.ref.message_id.startswith('embedded:')))
 
     @classmethod
     def from_dict(cls, value: dict) -> ContentBundle:
@@ -154,7 +158,7 @@ class ChatGateway(Protocol):
     def events(self) -> AsyncIterator[ChatEvent]: ...
     async def fetch_message(self, ref: MessageRef) -> ChatMessage | None: ...
     async def fetch_forward(self, ref: MessageRef, forward_id: str) -> list[dict]: ...
-    async def send_forward(self, group_id: str, nodes: list[dict]) -> str: ...
+    async def send_forward(self, group_id: str, nodes: list[dict], *, before_send=None) -> str: ...
 
 class AgentExecutor(Protocol):
     async def run(self, task: AgentTask) -> AgentResult: ...

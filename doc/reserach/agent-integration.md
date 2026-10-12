@@ -1,74 +1,32 @@
-# Agent 接入方式与运行时调研
+# Hermes worker 与 Agent 接入依据
 
-调研日期：2026-10-09。本文能力说明来自官方文档与源码核对，作为接入方式的研究依据。架构约定见[设计文档](../design.md#2-接入边界pullshit-控制流程agent-提供能力)，项目接入实验与排期见[开发 TODO](../phase-1-todo.md)。DSH 方案作为框架研究案例。
+调研日期：2026-10-12。本文区分上游接口声明、源码核对和运行测量；项目职责见[总体设计](../design.md#2-接入边界pullshit-控制流程agent-提供能力)，接口见[接口文档](../interfaces.md)，实施与联调状态见[开发 TODO](../phase-1-todo.md)。
 
-## 决策：pullshit 控制业务，agent 作为可替换执行步骤
+## Hermes 选型与固定来源
 
-pullshit 通过 SDK、插件或进程/API 接口复用 agent 能力。pullshit 自己保存内容包、群规则、预算、发布与反馈记录；agent 负责搜索、理解、上下文补全和候选提案。
+项目使用独立 Python worker 承载 Hermes。固定上游提交 `7cc3fb8cb55898747dd1dfa56fda3e16ebba028e`，源码原样安装，依赖使用其 `uv.lock`。该版本的正式运行环境为 Python 3.14；主程序与 worker 的依赖环境分开管理。
 
-这里区分业务控制与运行时承载：发布规则由 pullshit 的确定性代码执行，agent 提供分析与候选提案。
+[官方接入文档](https://hermes-agent.nousresearch.com/docs/developer-guide/programmatic-integration)描述 ACP、stdio JSON-RPC、HTTP/SSE 和 Python `AIAgent` 接入。项目 worker 使用 Python 入口，通过项目自己的 JSON Lines 协议交换任务和结果；对外操作入口由 pullshit 提供。
 
-## 四种接法
+[固定版本 AIAgent 源码](https://github.com/NousResearch/hermes-agent/blob/7cc3fb8cb55898747dd1dfa56fda3e16ebba028e/run_agent.py)提供 `enabled_toolsets`、`max_iterations`、`max_tokens`、`run_budget_seconds`、`skip_context_files`、`skip_memory`、`skip_background_review`、`save_trajectories` 和 `session_db` 等参数。这些接口支持任务范围、循环上限和临时会话配置；实际约束由项目适配器验证。
 
-| 接法 | 谁启动流程 | 适用情况 | 主要代价 |
-| --- | --- | --- | --- |
-| 外围调用：HTTP/RPC/子进程 | pullshit | 已有完整 agent，希望隔离运行并易于替换 | 需要适配取消、结构化结果、usage 和异常；子进程冷启动有成本 |
-| SDK 嵌入 | pullshit | 希望直接控制会话、工具集合和事件流 | 依赖库升级可能影响主进程；同进程插件不是权限隔离 |
-| 宿主插件 | agent 宿主加载 pullshit 插件，插件代码驱动业务 | 希望使用宿主模型配置、UI 和扩展生态 | 与插件生命周期耦合，需处理卸载、重启和持久任务恢复 |
-| fork 上游 | 自行维护的运行时 | 必需能力无法经公开扩展点提供，且上游贡献不适用 | 升级、合并和安全修复负担；不是首选 |
+## 工具和调用控制
 
-Skill 可以描述如何搜罗、判断和整理内容；它不负责持久队列、幂等发布或可靠调度。MCP 可暴露工具，但不能单独保证任务取消、预算和完整生命周期。根据真实需要选择接口，不为跨框架统一而预建多个适配器。
+[官方插件文档](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins)提供 `register(ctx)`、`ctx.register_tool()` 和调用 middleware。项目工具单独注册，业务状态保存在 pullshit repository 中。任务工具范围、输出和失效语义统一见接口文档。
 
-## DeepSeek Harness（DSH）参考资料
+源码核对发现：固定版本的 middleware 可在插件异常时退回下游调用。预算拒绝因此必须终止 worker 或通过能阻止下游执行的明确结果处理，并用无真实请求的测试验证。异常日志和命令输出须保持协议与诊断的边界。
 
-官方仓库将 DSH 定义为基于 Cordis 的插件化 agent harness，并明确标为 developer preview，提示存在不兼容变更。[官方仓库](https://github.com/deepseek-ai/deepseek-harness)
+模型 usage、缓存 token 和估算费用由运行时返回。项目预算预留覆盖主模型、图片理解、格式修正与重试；不完整 usage 使用保守结算。任务取消由父进程终止进程组，媒体、临时会话和崩溃残留纳入清理。
 
-插件教程提供 TypeScript `apply(ctx)` 入口、依赖声明和资源生命周期机制。可通过插件注册工具、事件监听和服务；连接等资源通过清理函数释放。[官方插件教程](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/index.md)
+## DeepSeek 编码工具
 
-官方 `dsh-headless` 提供一次调用执行一个任务、输出最终答案并退出的路径。[官方 headless 文档](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/bundle/headless)
+开发可以通过独立 DeepSeek Harness coding session 完成模块编码；架构、接口冻结、集成和 review 由主维护者负责。这与项目运行时的 Hermes 选材流程分别配置。
 
-### 方案 A：薄插件 + 独立业务服务
+[DSH 官方 headless 文档](https://github.com/deepseek-ai/deepseek-harness/tree/master/packages/bundle/headless)描述一次任务执行、JSON 事件和会话继续。本机开发接入使用已安装的 `dsh-acp`，其 ACP 方法为 initialize、session/new、session/prompt、session/cancel；具体机器启动脚本和配置保存在 Git 忽略目录。
 
-pullshit 服务负责 NapCat 接入、持久状态和发布；DSH 插件向 agent 暴露限定范围的 `get_bundle`、`search_sources`、`submit_candidate` 等工具。不要给它一个无限制 `send_qq_message` 工具。
+## 验证记录入口
 
-DSH 可以提供模型与工具环境；候选结果交回 pullshit。是否存在满足需求的外部任务提交、取消和计量接口，要在选定版本上验证，不能仅凭“插件化”认定全部具备。
+固定版本安装、导入、协议、模拟 provider 和 QQ 部署测量统一记录在[带日期的验证记录](../p0-implementation.md)。论文研究和偏好学习依据见[研究索引](README.md)。
 
-### 方案 B：pullshit workflow 调用 headless
-
-```text
-到期搜罗任务 → pullshit 预留预算 → 适配器启动受限 DSH 任务
-           → agent 搜索并返回候选与来源 → 校验并入库
-           → 目标群选择 → 发布队列
-```
-
-官方文档中的“打印最终答案”不自动等于稳定的 JSON 协议。试验必须验证：结果 schema、stdout 与日志分离、usage、超时与子进程树终止、非交互模式、并发隔离。无法可靠计量或取消时，不能作为无限制后台任务上线。
-
-### 方案 C：pullshit 整体作为插件
-
-如果个人部署希望只有一个宿主进程，也可以把业务核心作为插件服务运行，并用 SQLite 保存状态。领域代码保持独立于 `ctx`，宿主重启/插件卸载后从持久状态恢复。资源清理不等于任务持久化；插件形态也不代表每条 QQ 消息都要触发模型。
-
-A/B/C 描述不同的研究接法，其输出协议和生命周期均需在具体版本上验证。
-
-## 其他候选
-
-| 候选 | 官方提供的相关能力 | 对 pullshit 的适配判断 |
-| --- | --- | --- |
-| [Hermes](https://hermes-agent.nousresearch.com/docs/developer-guide/programmatic-integration/) | HTTP API、JSON-RPC、Python 嵌入入口；另有[插件机制](https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins/) | 想复用完整 agent 的工具与任务能力时，适合外围 worker；无需 fork |
-| [Pi agent core](https://github.com/earendil-works/pi/tree/main/packages/agent) | agent 循环、工具执行、事件流、上下文转换 | TypeScript 中嵌入，控制上下文与工具集合；业务记忆仍归 pullshit |
-| [PydanticAI](https://pydantic.dev/docs/ai/overview/) | Python agent 框架，类型化依赖、工具与结构化输出 | 重视结构化分析、参数校验的 Python 实现候选；不是现成 QQ 机器人 |
-| [LangGraph](https://github.com/langchain-ai/langgraph) | 有状态编排、持久执行和人工介入 | 当流程分支、暂停恢复变复杂时评估；属于编排框架，不是另一个完整助手 |
-
-接入评估以 Python 业务程序的任务需求为依据，评估维度包含结构化输出、费用计量、任务取消及持久状态恢复。
-
-## 最小契约与验收
-
-输入至少包含：任务 ID、能力类型（搜罗/上下文补全/分析）、来源与目标范围、内容包版本、截止时间、工具和费用预算、输出 schema。
-
-输出至少包含：状态、候选与证据、未确定项、实际 usage（或明确标注不可得）、运行时/模型/提示版本。执行权限和范围由适配器绑定，不能由模型扩大。
-
-pullshit 是业务任务状态的权威来源；宿主负责单次 agent 执行。避免宿主 cron 与 pullshit 调度器同时拥有同一任务，造成重复运行。
-
-搜罗接口的验收要求：候选包含内容与出处，来源在批准范围内；结构化输出、预算、取消和重启恢复均有可复现结果。候选提交至候选池，由发布流程执行发布规则。
-
-最后修改时间：2026-10-10T07:50:43Z
+最后修改时间：2026-10-12T17:47:09Z
 模型署名：GPT-6

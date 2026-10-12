@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import copy
 import json
+import math
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -71,6 +72,10 @@ class Settings:
             raise ConfigError('缺少 Hermes 模型连接配置')
         if agent['daily_budget_usd'] <= 0 or agent['task_budget_usd'] <= 0:
             raise ConfigError('必须显式配置模型预算')
+        if agent['input_usd_per_million']<=0 or agent['output_usd_per_million']<=0:
+            raise ConfigError('必须显式配置模型单价')
+        if agent['vision_model'] and (not agent['vision_base_url'] or not os.environ.get(agent['vision_api_key_env']) or agent['vision_input_usd_per_million']<=0 or agent['vision_output_usd_per_million']<=0):
+            raise ConfigError('视觉模型需要连接、密钥和独立单价')
         if not Path(agent['python']).is_file(): raise ConfigError('Hermes Python 解释器不存在')
 
 
@@ -91,13 +96,13 @@ def load_settings(root: Path,profile: str) -> Settings:
         raise ConfigError('路由范围无效')
     if len(settings.routes) != len(routes): raise ConfigError('重复路由')
     if value['runtime']['mode'] not in {'auto','shadow'}: raise ConfigError('运行模式必须为 auto 或 shadow')
-    for section in ('content','context','media','limits','retention'):
+    for section in ('runtime','napcat','content','context','media','limits','retention'):
         for key,item in value[section].items():
-            if isinstance(item,(int,float)) and (isinstance(item,bool) or item <= 0): raise ConfigError(f'配置必须为正数: {section}.{key}')
+            if isinstance(item,(int,float)) and (isinstance(item,bool) or not math.isfinite(item) or item <= 0): raise ConfigError(f'配置必须为正数: {section}.{key}')
     for key in ('concurrency','timeout_seconds','model_calls','tool_calls','max_output_tokens','max_input_characters'):
         if value['agent'][key] <= 0: raise ConfigError(f'配置必须为正数: agent.{key}')
-    for key in ('daily_budget_usd','task_budget_usd','input_usd_per_million','output_usd_per_million'):
-        if value['agent'][key] < 0: raise ConfigError('模型预算与单价不能为负')
+    for key in ('daily_budget_usd','task_budget_usd','input_usd_per_million','output_usd_per_million','vision_input_usd_per_million','vision_output_usd_per_million'):
+        if not math.isfinite(value['agent'][key]) or value['agent'][key] < 0: raise ConfigError('模型预算与单价不能为负')
     if not 0 <= value['agent']['minimum_score'] <= 1: raise ConfigError('选材分数范围无效')
     if value['retention']['message_days'] > 7 or value['retention']['content_days'] > 7 or value['retention']['log_days'] > 7:
         raise ConfigError('内容和日志保留期限最多 7 天')

@@ -17,6 +17,8 @@
     "vision_model": "",
     "vision_base_url": "",
     "vision_api_key_env": "PULLSHIT_VISION_API_KEY",
+    "vision_input_usd_per_million": 0.0,
+    "vision_output_usd_per_million": 0.0,
     "concurrency": 2,
     "timeout_seconds": 90,
     "model_calls": 8,

@@ -1,16 +1,16 @@
-# P0 契约与验证记录
+# 契约与验证记录
 
-本文记录事件与发送契约，以及 2026-10-10 的模拟检查和真实 QQ 测试证据。QQ 账号由 NapCat 管理，部署凭据保存在 Git 忽略的本地配置或仓库外机器清单。开发任务与阶段状态见[开发 TODO](phase-1-todo.md)。
+本文保留 2026-10-10 的接入测试证据，并记录 2026-10-12 重建版本的验证方法和结果。业务接口以[接口文档](interfaces.md)为准。QQ 账号由 NapCat 管理，部署凭据保存在 Git 忽略的本地配置或仓库外机器清单。开发任务与阶段状态见[开发 TODO](phase-1-todo.md)。
 
 ## 运行与接口依据
 
 Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/pullshit/)，平台适配采用 OneBot 11 正向联合 WebSocket；依赖固定为 websockets 17.2，安装校验值见 [requirements.lock](../requirements.lock)。运行与检查命令见 [README](../README.md)。
 
-模块职责、接口和依赖见[QQ 接入层设计](qq-adapter.md#职责与代码边界)。
+模块职责、接口和依赖见[QQ 接入层设计](qq-adapter.md)。
 
 生产配置与开发配置采用独立数据库、媒体目录、日志目录和 token 环境变量。真实凭据和账号保存在私有配置及证据目录。
 
-## 事件与发送契约
+## 2026-10-10 事件与发送契约记录
 
 原始事件保存授权范围内的 JSON 证据、账号、群、事件类型、发生/接收时间与去重键。群消息的幂等身份为账号、群、平台消息 ID；其余事件按完整原始载荷指纹识别重复。接收程序忽略私聊、其他账号、未授权群和支持范围之外的事件类型。
 
@@ -69,7 +69,21 @@ Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/
 - 重新安装本地可编辑包，`python -m pullshit --help` 与 `pullshit --help` 均可启动。
 - 构建 wheel，在独立临时目录校验全部业务模块的导入来源、命令入口及媒体子进程；媒体检查使用本机地址拒绝路径，没有发起网络请求。
 
-源码目录与包职责见[分层与模块](design.md#32-分层与模块)。
+源码目录与包职责见[分层与模块](design.md#3-模块与依赖)。
+
+## 2026-10-12 业务重建验证
+
+使用 Python 3.12.3 主程序和独立 Python 3.14.8 Hermes worker。Hermes 源码固定于 `7cc3fb8cb55898747dd1dfa56fda3e16ebba028e`，通过其锁文件安装 67 个依赖包，`AIAgent` 导入成功。三个独立 DeepSeek ACP 编码会话分别产出接入／内容、存储和 agent 模块；接口冻结、集成修正及 review 由 GPT-6 执行。
+
+- `.venv/bin/python -m unittest discover -s tests -v`：137 项通过。包含 99/100/101/200/201 节点顺序拆分，日配额与事务并发，分片失败／unknown 恢复，发布边界暂停与撤回，精确反馈、每日偏好和回滚。
+- 子进程验证：实际媒体 worker 拒绝私网地址；下载取消及超时回收真实进程；Hermes worker 超时、取消与临时目录清理通过。取消场景包含忽略 SIGTERM 的子进程。
+- 实际文件回收验证：过期媒体文件删除；批量 SQLite 内容删除后数据库大小下降、空闲页归零、WAL 截断为 0 字节；读事务阻塞时报告 busy，解除读锁后回收成功。
+- Hermes SDK 验证：使用真实上游 `AIAgent` 和本机模拟 HTTP/SSE 模型服务，完成项目工具调用、流式 usage 结算与图片理解。暴露的工具为 get_context、inspect_image、get_group_preferences、submit_analysis。两次文本调用模拟费用合计 0.00032 USD；视觉使用独立单价，三次调用合计 0.00044 USD。额度拒绝和过长上下文均没有发起模型请求。
+- CLI 回放：正常文本提名、模拟选择、发布回执与 `/喜欢` 形成完整流程；同库重复回放未重复发布。未提供模拟判断时没有发布；真实环境路径及回放目录符号链接被拒绝。
+- 安装验证：可编辑安装 0.2.0、源码编译、开发／生产基础配置检查和主环境依赖检查通过。wheel 在独立环境安装后，从项目目录外导入 15 个模块，CLI 和媒体子进程运行成功。
+- 只读 QQ 连接探测：使用私有开发配置及其环境变量，返回 OutcomeUnknown，未取得登录和版本信息。本轮没有真实群发送，私有配置发送开关为关闭。真实模型连接和平台联调的任务见[开发 TODO](phase-1-todo.md#真实联调与部署)。
+
+模拟模型响应、模拟发送器与上述只读连接结果分别记录；费用数字用于验证计量逻辑，生产费用按供应商 usage 与配置单价计算。
 
 ## 协议与安装来源
 
@@ -82,5 +96,5 @@ Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/
 - [NapCat Docker](https://github.com/NapNeko/NapCat-Docker)：官方容器部署和持久化目录。
 - [websockets asyncio 客户端](https://websockets.readthedocs.io/en/stable/reference/asyncio/client.html)：客户端调用、超时与缓冲限制。
 
-最后修改时间：2026-10-10T11:55:51Z
+最后修改时间：2026-10-12T17:47:09Z
 模型署名：GPT-6
