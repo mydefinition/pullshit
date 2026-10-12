@@ -21,6 +21,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -84,7 +85,8 @@ class VisionError(RuntimeError):
 
 
 def vision_describe_image(endpoint: str, model: str, api_key: str, image_bytes: bytes,
-                          mime: str, question: str, max_tokens: int, timeout: float) -> dict:
+                          mime: str, question: str, max_tokens: int, timeout: float,
+                          session_id: str = '') -> dict:
     """对一张图片调用 OpenAI 兼容的视觉接口，返回描述与 token 用量。"""
     url = endpoint if endpoint.rstrip('/').endswith('/chat/completions') else endpoint.rstrip('/') + '/chat/completions'
     data_url = 'data:%s;base64,%s' % (mime or 'image/jpeg', base64.b64encode(image_bytes).decode('ascii'))
@@ -96,9 +98,13 @@ def vision_describe_image(endpoint: str, model: str, api_key: str, image_bytes: 
         ]}],
         'max_tokens': max_tokens,
     }
-    request = urllib.request.Request(url, data=json.dumps(body).encode(), method='POST', headers={
+    headers = {
         'Content-Type': 'application/json', 'Authorization': 'Bearer ' + api_key,
-    })
+        'User-Agent': 'pullshit/0.2',
+    }
+    if urlsplit(url).hostname == 'opencode.ai' and session_id:
+        headers['x-opencode-session'] = session_id
+    request = urllib.request.Request(url, data=json.dumps(body).encode(), method='POST', headers=headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode('utf-8'))
@@ -385,16 +391,30 @@ class HermesExecutor:
         analysis, errors = protocol.normalize_analysis(raw, run.task.kind)
         if analysis is None:
             return {'accepted': False, 'errors': errors[:8]}
+        known = self._known_evidence_ids(run.task)
+        if any(entry not in known for entry in analysis['evidence_ids']):
+            return {'accepted': False, 'errors': ['evidence_out_of_scope'], 'valid_evidence_ids': sorted(known)}
+        if analysis['decision'] == 'eligible' and analysis['score'] < self._settings.data['agent'].get('minimum_score', .75):
+            return {'accepted': False, 'errors': ['score_below_minimum']}
         run.submitted = analysis
         return {'accepted': True}
+
+    @staticmethod
+    def _known_evidence_ids(task):
+        bundle = task.bundle
+        known = ({value for message in bundle.messages for value in (message.ref.message_id, message.ref.key)}
+                 | {media.reference_id for media in bundle.media})
+        if task.kind == 'feedback' and task.feedback.get('evidence_id'):
+            known.add(task.feedback['evidence_id'])
+        return known
 
     def _default_get_context(self, task: AgentTask, arguments: dict) -> dict:
         if not self._in_scope(task, arguments):
             return {'error': 'denied_scope'}
         payload = json.dumps(asdict(task.bundle), ensure_ascii=False)
         max_chars = arguments.get('max_chars')
-        if isinstance(max_chars, int) and max_chars > 0:
-            payload = payload[:max_chars]
+        if isinstance(max_chars, int) and max_chars > 0 and len(payload) > max_chars:
+            return {'error': 'context_character_limit'}
         return {'bundle': json.loads(payload)}
 
     def _default_get_group_preferences(self, task: AgentTask, arguments: dict) -> dict:
@@ -439,7 +459,7 @@ class HermesExecutor:
         try:
             description = await asyncio.to_thread(
                 vision_describe_image, endpoint, model, api_key, image_bytes, media.mime or '',
-                _VISION_QUESTION, max_tokens, 15.0)
+                _VISION_QUESTION, max_tokens, 15.0, session_id=run.task.task_id)
         except VisionError as exc:
             return {'error': exc.code}
         tokens = {key: description.get(key) for key in ('input_tokens', 'output_tokens')}
@@ -575,10 +595,7 @@ class HermesExecutor:
                 problems.append('%s_exceeded' % name)
         bundle = task.bundle
         usage = {**usage, 'cost_usd': run.settled_total, 'reserved_usd': sum(run.reservations.values()), 'complete': not run.reservations}
-        known_ids = ({m.ref.message_id for m in bundle.messages}
-                     | {m.reference_id for m in bundle.media})
-        if task.kind == 'feedback':
-            known_ids.add(task.feedback.get('evidence_id', ''))
+        known_ids = self._known_evidence_ids(task)
         if any(entry not in known_ids for entry in analysis['evidence_ids']):
             problems.append('evidence_out_of_scope')
         if not isinstance(inspected, list) or len(inspected) > 1000 \

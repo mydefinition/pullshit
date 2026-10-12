@@ -17,7 +17,7 @@ SDK_PYTHON=Path(os.environ.get('PULLSHIT_HERMES_PYTHON',str(Path(__file__).resol
 @unittest.skipUnless(SDK_PYTHON.is_file(),'Hermes worker interpreter is required for SDK integration')
 class HermesSdkTests(Workspace):
     def configure(self,deny=False,image=False):
-        self.requests=[]; self.image=image; self.image_ref=None
+        self.requests=[]; self.user_agents=[]; self.image=image; self.image_ref=None
         owner=self
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args): pass
@@ -26,6 +26,7 @@ class HermesSdkTests(Workspace):
                 if self.path!='/v1/chat/completions':
                     raw=b'{"error":"not_found"}'; self.send_response(404); self.send_header('Content-Length',str(len(raw))); self.end_headers(); self.wfile.write(raw); return
                 owner.requests.append(body)
+                owner.user_agents.append(self.headers.get('User-Agent'))
                 if body.get('model')=='mock-vision':
                     raw=json.dumps({'choices':[{'message':{'content':'verified image description'}}],'usage':{'prompt_tokens':20,'completion_tokens':15}}).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(raw))); self.end_headers(); self.wfile.write(raw); return
                 main_requests=[request for request in owner.requests if request['model']=='mock-model']
@@ -33,6 +34,11 @@ class HermesSdkTests(Workspace):
                     delta={'role':'assistant','content':None,'tool_calls':[{'index':0,'id':'test-call','type':'function','function':{'name':'get_group_preferences','arguments':'{"group_id":"900201"}'}}]}; finish='tool_calls'
                     if owner.image:
                         delta['tool_calls'][0]['function']={'name':'inspect_image','arguments':json.dumps({'reference_id':owner.image_ref.reference_id})}
+                    else:
+                        delta['tool_calls'].extend([
+                            {'index':1,'id':'context-call','type':'function','function':{'name':'get_context','arguments':'{}'}},
+                            {'index':2,'id':'analysis-call','type':'function','function':{'name':'submit_analysis','arguments':json.dumps({'analysis':{'decision':'eligible','score':.95,'tags':['test'],'evidence_ids':['1'],'reason':'mock provider verified'}})}}
+                        ])
                 else:
                     delta={'role':'assistant','content':json.dumps({'decision':'eligible','score':.95,'tags':['test'],'risks':[],'evidence_ids':['1'],'reason':'mock provider verified'})}; finish='stop'
                 chunk={'id':'mock','object':'chat.completion.chunk','created':int(time.time()),'model':'mock-model','choices':[{'index':0,'delta':delta,'finish_reason':finish}]}
@@ -58,10 +64,15 @@ class HermesSdkTests(Workspace):
             result=asyncio.run(HermesExecutor(self.settings,self.store_instance).run(task))
         self.assertEqual(result.decision,'eligible',result.reason)
         self.assertEqual(len(self.requests),2)
+        self.assertEqual(self.user_agents,['pullshit/0.2','pullshit/0.2'])
         names={tool['function']['name'] for tool in self.requests[0]['tools']}
         self.assertEqual(names,{'get_context','inspect_image','get_group_preferences','submit_analysis'})
         tool_messages=[v for v in self.requests[1]['messages'] if v['role']=='tool']
-        self.assertTrue(any('preferences' in message['content'] for message in tool_messages))
+        results={message['tool_call_id']:json.loads(message['content']) for message in tool_messages}
+        self.assertEqual(results['test-call']['preferences'],{})
+        self.assertEqual(results['context-call']['bundle']['messages'][0]['ref']['message_id'],'1')
+        self.assertTrue(results['analysis-call']['accepted'])
+        self.assertTrue(all('error' not in value for value in results.values()))
         day=time.strftime('%Y-%m-%d',time.gmtime()); budget=self.store_instance.budget(day,'global','model_usd')
         self.assertAlmostEqual(budget['reserved'],0,places=10); self.assertAlmostEqual(budget['used'],.00032)
         self.assertAlmostEqual(result.usage['cost_usd'],.00032)
@@ -79,6 +90,9 @@ class HermesSdkTests(Workspace):
         self.assertEqual(result.decision,'eligible',result.reason)
         self.assertEqual(result.inspected_images,[self.image_ref.reference_id])
         self.assertEqual([v['model'] for v in self.requests],['mock-model','mock-vision','mock-model'])
+        messages=[v for v in self.requests[-1]['messages'] if v['role']=='tool']
+        inspected=json.loads(messages[0]['content'])
+        self.assertTrue(inspected['ok']); self.assertEqual(inspected['reference_id'],self.image_ref.reference_id)
         day=time.strftime('%Y-%m-%d',time.gmtime()); budget=self.store_instance.budget(day,'global','model_usd')
         self.assertAlmostEqual(budget['reserved'],0,places=10); self.assertAlmostEqual(budget['used'],.00044)
     def test_oversized_context_stops_before_provider_and_cleans_worker(self):

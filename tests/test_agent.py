@@ -13,10 +13,12 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from types import SimpleNamespace
 
 from pullshit.agent import hermes_plugin as plugin
 from pullshit.agent import hermes_worker as worker
-from pullshit.agent.executor import HermesExecutor, clean_stale_workers
+from pullshit.agent.executor import HermesExecutor, clean_stale_workers, vision_describe_image
 from pullshit.contracts import (AgentTask, ChatMessage, ContentBundle, MediaRef,
                                 MessageRef, asdict)
 
@@ -641,6 +643,17 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.store.settlements), 1)
         self.assertAlmostEqual(self.store.settlements[0][4], 120e-6 * 0.5 + 40e-6 * 1.5)
 
+    def test_vision_request_identifies_client_and_preserves_task_session(self):
+        for host,session in [('opencode.ai','task-conversation'),('other.example','task-conversation')]:
+            with self.subTest(host=host), patch('pullshit.agent.executor.urllib.request.urlopen') as send:
+                send.return_value.__enter__.return_value.read.return_value=json.dumps({'choices':[{'message':{'content':'red'}}],'usage':{'prompt_tokens':9,'completion_tokens':3}}).encode()
+                result=vision_describe_image('https://'+host+'/v1','sample-model','test-key',b'image','image/png','Describe',100,2,session_id=session)
+                request=send.call_args.args[0]; headers={key.lower():value for key,value in request.header_items()}
+                self.assertEqual(headers['user-agent'],'pullshit/0.2')
+                self.assertEqual(headers['authorization'],'Bearer test-key')
+                self.assertEqual(headers.get('x-opencode-session'),session if host=='opencode.ai' else None)
+                self.assertEqual(result['input_tokens'],9)
+
     async def test_unverified_image_claim_flagged(self):
         settings = FakeSettings(agent_data(self.temp))
         executor = self.make_executor(settings)
@@ -709,6 +722,21 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('submit_analysis', instruction)
         with self.assertRaisesRegex(ValueError,'input_character_limit'):
             worker.build_instruction(task,limits,allow_truncation=False)
+
+    async def test_submit_checks_evidence_before_acceptance(self):
+        executor=self.make_executor(); task=make_task(self.temp,clock=self.clock)
+        run=SimpleNamespace(task=task,submitted=None)
+        analysis={'decision':'eligible','score':.9,'reason':'verified','evidence_ids':['999999']}
+        denied=await executor._invoke_tool(run,'submit_analysis',{'analysis':analysis})
+        self.assertFalse(denied['accepted']); self.assertIn('evidence_out_of_scope',denied['errors']); self.assertIsNone(run.submitted)
+        analysis['evidence_ids']=[task.bundle.messages[0].ref.key]
+        accepted=await executor._invoke_tool(run,'submit_analysis',{'analysis':analysis})
+        self.assertTrue(accepted['accepted']); self.assertEqual(run.submitted['evidence_ids'],analysis['evidence_ids'])
+
+    def test_context_character_cap_returns_valid_failure(self):
+        executor=self.make_executor(); task=make_task(self.temp,clock=self.clock)
+        result=executor._default_get_context(task,{'max_chars':1})
+        self.assertEqual(result,{'error':'context_character_limit'})
 
     def test_plugin_registration_against_fake_context(self):
         registrations = []

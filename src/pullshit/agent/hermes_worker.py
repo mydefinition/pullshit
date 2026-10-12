@@ -152,7 +152,7 @@ def install_plugin_home(home: Path) -> None:
     (target / 'plugin.yaml').write_text(_PLUGIN_MANIFEST, encoding='utf-8')
     config = home / 'config.yaml'
     if not config.exists():
-        config.write_text('plugins:\n  enabled: [%s]\ntools:\n  tool_search:\n    enabled: "off"\ncompression:\n  enabled: false\n' % protocol.TOOLSET_NAME, encoding='utf-8')
+        config.write_text('plugins:\n  enabled: [%s]\nmodel:\n  default_headers:\n    User-Agent: "pullshit/0.2"\ntools:\n  tool_search:\n    enabled: "off"\ncompression:\n  enabled: false\n' % protocol.TOOLSET_NAME, encoding='utf-8')
 
 
 def _segment_text(segment) -> str:
@@ -200,10 +200,13 @@ def build_instruction(task: AgentTask, limits: dict, *, allow_truncation=True) -
         '2. 上下文不足可调用 get_context；口味信号用 get_group_preferences。',
         '3. 完成分析后调用 submit_analysis 提交结论，字段必须是合法 JSON：',
         json.dumps(schema, ensure_ascii=False),
-        '4. eligible 表示值得转发且证据充分；rejected 表示不适合；拿不准或证据不足选 needs_review。',
-        '5. evidence_ids 只能引用上方出现的 message_id 或媒体 reference_id。',
+        '4. eligible 表示值得转发且证据充分，评分至少 %s；不适合或评分不足选 rejected；拿不准或证据不足选 needs_review。' % limits.get('minimum_score', .75),
+        '5. evidence_ids 使用消息 message_id 或完整 MessageRef.key、媒体 reference_id；反馈任务也可引用反馈信号的 evidence_id。',
         '6. 模型调用上限 %s 次、工具调用上限 %s 次；请一次性完成分析，不要闲聊。'
         % (int(limits.get('model_calls', 8)), int(limits.get('tool_calls', 8))),
+        '可用 evidence_ids（原样引用）：' + json.dumps(
+            [m.ref.message_id for m in task.bundle.messages] + [m.reference_id for m in task.bundle.media]
+            + ([task.feedback['evidence_id']] if task.kind == 'feedback' and task.feedback.get('evidence_id') else []), ensure_ascii=False),
     ])
     budget = int(limits.get('input_characters', 64000))
     used = len(skeleton) + len(rules) + 2
@@ -336,6 +339,7 @@ def _run(out: _Stdout) -> int:
         return 1
     limits = {'model_calls': 8, 'tool_calls': 8, 'output_tokens': 2048, 'input_characters': 64000}
     limits.update(task.limits or {})
+    limits['minimum_score'] = config.get('minimum_score', .75)
     timeout = float(config.get('timeout_seconds', 90) or 90)
     deadline = min(task.deadline, time.time() + timeout)
     bridge = Bridge(out, config, deadline)

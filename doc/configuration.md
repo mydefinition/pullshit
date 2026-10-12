@@ -32,6 +32,16 @@ uv sync --project local/hermes-runtime --python 3.14 --locked --no-dev
 
 默认并发 2、时限 90 秒、模型与工具调用各最多 8 次。输出 token 和输入字符上限共同限制任务。错误修正属于同一任务额度。素材和指令超过输入上限时返回需复核。模型、内容窗口和保留期配置在服务启动时加载；群授权、路由、发送模式、开关与持久暂停在处理或发布边界复查。
 
+## OpenCode Go 与 DeepSeek V4.1 Flash
+
+核对日期：2026-10-12。[官方推理接口](https://opencode.ai/v2/docs/console/api/inference)使用 OpenAI Chat Completions；工作区 `GET /console/api/v2/config` 提供模型、入口和单价。[Go 文档](https://opencode.ai/v2/docs/console/go/)要求客户端标识和每次对话稳定的 `x-opencode-session`。
+
+配置 `provider=custom`、`model=deepseek-v4.1-flash`、`base_url=https://opencode.ai/inference/go/openai/v1`。密钥使用 `PULLSHIT_AGENT_API_KEY`。视觉配置可使用同一模型、入口和环境变量；文本与视觉费用分别配置。
+
+worker 标识为 `pullshit/0.2`；固定 Hermes 版本发送主模型会话头，图片请求使用同一任务 ID。项目工具插件把父进程返回的对象编码为 Hermes 接受的 JSON 字符串。
+
+联调配置每日 1 USD、单任务 0.05 USD；每百万输入／输出 token 分别按 0.30 / 1.20 USD 峰值单价计量。缓存输入也按配置输入价计算，`usage.cost_usd` 为项目的保守费用估算；供应商实际账单与该估算分别核对。真实调用结果见[验证记录](p0-implementation.md#2026-10-12-opencode-go-真实模型验证)。
+
 ## 内容、流量与保留期
 
 | 配置 | 默认值 |
@@ -53,5 +63,5 @@ uv sync --project local/hermes-runtime --python 3.14 --locked --no-dev
 
 新库使用 `state.sqlite3`。程序只打开新 schema。具体设备的启动服务、路径、凭据和运维脚本存放在 Git 忽略的 `local/`。
 
-最后修改时间：2026-10-12T17:47:09Z
+最后修改时间：2026-10-12T18:39:19Z
 模型署名：GPT-6

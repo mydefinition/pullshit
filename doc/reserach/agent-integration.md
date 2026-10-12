@@ -18,6 +18,8 @@
 
 模型 usage、缓存 token 和估算费用由运行时返回。项目预算预留覆盖主模型、图片理解、格式修正与重试；不完整 usage 使用保守结算。任务取消由父进程终止进程组，媒体、临时会话和崩溃残留纳入清理。
 
+2026-10-12 真实 OpenCode Go 调用验证了固定版本的会话头支持；项目客户端和图片接口的配置见[配置说明](../configuration.md#opencode-go-与-deepseek-v41-flash)。固定版本 [ToolRegistry](https://github.com/NousResearch/hermes-agent/blob/7cc3fb8cb55898747dd1dfa56fda3e16ebba028e/tools/registry.py) 将普通字典结果转换为工具契约错误，处理器返回格式统一见[接口文档](../interfaces.md#hermes-worker-协议)。真实与模拟检查的方法和结果见[验证记录](../p0-implementation.md#2026-10-12-opencode-go-真实模型验证)。
+
 ## DeepSeek 编码工具
 
 开发可以通过独立 DeepSeek Harness coding session 完成模块编码；架构、接口冻结、集成和 review 由主维护者负责。这与项目运行时的 Hermes 选材流程分别配置。
@@ -28,5 +30,5 @@
 
 固定版本安装、导入、协议、模拟 provider 和 QQ 部署测量统一记录在[带日期的验证记录](../p0-implementation.md)。论文研究和偏好学习依据见[研究索引](README.md)。
 
-最后修改时间：2026-10-12T17:47:09Z
+最后修改时间：2026-10-12T18:39:19Z
 模型署名：GPT-6

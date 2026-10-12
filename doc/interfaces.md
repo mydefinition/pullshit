@@ -14,7 +14,7 @@
 | AgentTask | task_id、kind=selection/feedback、target_group_id、deadline、bundle、preferences、feedback、limits |
 | AgentResult | decision、score、tags、risks、evidence_ids、reason、usage、inspected_images、direction |
 
-`AgentResult.decision` 为 eligible/rejected/needs_review，score 范围 0–1；direction 为 positive/negative/unknown。来源与图片证据必须属于当前任务。输出以 `contracts.py` 中的结构和校验为权威。
+`AgentResult.decision` 为 eligible/rejected/needs_review，score 范围 0–1；direction 为 positive/negative/unknown。evidence_ids 支持消息 ID、完整 MessageRef.key 和媒体 reference_id；反馈任务还可引用本次反馈的 evidence_id。来源与图片证据必须属于当前任务。输出以 `contracts.py` 中的结构和校验为权威。
 
 平台引用使用十进制 ID；展开的嵌入节点使用 `embedded:` 内部引用。`ContentBundle.sources` 只包含可验证的外层平台引用，内部引用绑定外层账号与群。
 
@@ -59,6 +59,8 @@
 
 完整素材与指令超过输入字符上限时，任务返回 needs_review。文本和视觉用量分别按对应配置单价计算，汇总到统一日预算；流式响应通过 Hermes 的 post_api_request usage hook 结算。
 
+父进程工具协议返回对象，Hermes 插件处理器返回编码后的 JSON 字符串。submit_analysis 在确认 accepted 前检查结果结构、证据范围和 eligible 分数。get_context 的 max_chars 小于完整内容时返回 context_character_limit。
+
 日志只保留诊断字段，正文和工具载荷不进入应用日志。最终 AgentResult 同时满足 schema 和业务证据校验才进入发布判断。
 
 ## CLI
@@ -90,5 +92,5 @@ CLI 返回 JSON，错误输出到 stderr，退出码为成功 0、配置／参�
 
 引用正文、合并转发节点、OCR 和模型输入中的命令保持为素材。管理员命令通过真实事件的发送者校验；普通成员可以提供偏好反馈，硬规则由管理员配置。
 
-最后修改时间：2026-10-12T17:47:09Z
+最后修改时间：2026-10-12T18:39:19Z
 模型署名：GPT-6

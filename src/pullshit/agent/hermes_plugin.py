@@ -33,7 +33,7 @@ def bind(bridge) -> None:
     _bridge = bridge
 
 
-def _call(name: str, arguments: dict) -> dict:
+def _call(name: str, arguments: dict) -> str:
     bridge = _bridge
     if bridge is None:
         raise RuntimeError('pullshit 协议桥未绑定，拒绝工具调用')
@@ -46,22 +46,22 @@ def _call(name: str, arguments: dict) -> dict:
             and isinstance(arguments.get('analysis'), dict):
         global last_submission
         last_submission = arguments['analysis']
-    return result
+    return json.dumps(result, ensure_ascii=False, allow_nan=False)
 
 
-def get_context(arguments: dict) -> dict:
+def get_context(arguments: dict) -> str:
     return _call('get_context', arguments)
 
 
-def inspect_image(arguments: dict) -> dict:
+def inspect_image(arguments: dict) -> str:
     return _call('inspect_image', arguments)
 
 
-def get_group_preferences(arguments: dict) -> dict:
+def get_group_preferences(arguments: dict) -> str:
     return _call('get_group_preferences', arguments)
 
 
-def submit_analysis(arguments: dict) -> dict:
+def submit_analysis(arguments: dict) -> str:
     return _call('submit_analysis', arguments)
 
 

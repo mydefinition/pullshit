@@ -85,6 +85,16 @@ Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/
 
 模拟模型响应、模拟发送器与上述只读连接结果分别记录；费用数字用于验证计量逻辑，生产费用按供应商 usage 与配置单价计算。
 
+## 2026-10-12 OpenCode Go 真实模型验证
+
+从本机私有凭据文件提取 OpenCode 密钥，模型使用 `deepseek-v4.1-flash`。官方调用依据见[推理 API](https://opencode.ai/v2/docs/console/api/inference)与[Go 接入要求](https://opencode.ai/v2/docs/console/go/)，核对日期为 2026-10-12。工作区配置接口和模型列表读取成功；普通付费入口返回 HTTP 402、Insufficient account funds，Go 入口补齐会话头后返回有效响应。
+
+- 真实 Hermes 文本任务（2026-10-12T18:36:23Z）：3 次模型调用、3 次工具调用，返回 needs_review 和 0.60 分，证据与结果通过校验；本任务预留金额归零，任务目录删除。
+- 真实图片任务（2026-10-12T18:33:19Z）：使用本地生成的 128×128 纯色 PNG，完成图片理解、群偏好读取与结构化提交；3 次模型调用、3 次工具调用，返回 rejected 和 0.05 分，图片检查凭据通过校验，任务目录删除。
+- 真实调用暴露 Hermes 工具结果必须为 JSON 字符串的契约；插件完成编码后，模型取得有效上下文、偏好与图片结果。SDK 模拟测试逐项解析实际工具内容，检查 accepted 和错误字段。
+- 完整测试 140 项通过，包含客户端标识、图片会话头、提交阶段的越权证据拒绝和上下文字符限额。费用预算使用配置峰值单价；缓存计费差异保留为保守估算。
+- 开发配置的 --ready 检查通过；重测 QQ 只读连接仍返回 OutcomeUnknown。发送关闭，验证使用模拟 QQ 身份与自行生成的素材，没有真实群发送。
+
 ## 协议与安装来源
 
 核对日期：2026-10-10。外部文档支持接入设计，实测证据见本文带日期的验证记录。
@@ -96,5 +106,5 @@ Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/
 - [NapCat Docker](https://github.com/NapNeko/NapCat-Docker)：官方容器部署和持久化目录。
 - [websockets asyncio 客户端](https://websockets.readthedocs.io/en/stable/reference/asyncio/client.html)：客户端调用、超时与缓冲限制。
 
-最后修改时间：2026-10-12T17:47:09Z
+最后修改时间：2026-10-12T18:39:19Z
 模型署名：GPT-6
