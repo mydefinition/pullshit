@@ -13,6 +13,12 @@
 
 配置示例见 [local.example.json](../config/local.example.json)。主程序从认证连接获取 QQ 账号，授权变化在处理和发送边界重新检查。
 
+## 本机模拟接口
+
+`simulation-api` 使用现有 profile 配置连接 NapCat，`--account` 固定预期 QQ 登录账号，`--port` 默认 18700；监听地址固定为 `127.0.0.1`。`--token-env` 默认 `PULLSHIT_SIMULATION_API_TOKEN`，对应环境变量至少 32 字符，使用独立私有文件管理。API token 与 NapCat token 分别管理，API token 的环境变量名称通过命令参数指定。
+
+接口在请求及发送边界重新加载目标授权、auto 模式、发送开关和持久暂停。操作员模拟请求每进程每分钟最多 5 次，固定发送含说明的两个纯文本节点；自动策展发布额度继续由发布队列管理。HTTP 请求与返回字段见[接口文档](interfaces.md#模拟转发-http-接口)。接口使用当前环境数据库同目录的独占锁及有界回执文件，可与业务进程同时运行；业务数据库保持六张表。
+
 ## Hermes worker
 
 主程序 Python 3.12+；固定 Hermes 版本的 worker 使用独立 Python 3.14 环境。安装时固定上游源码提交，并使用其依赖锁：
@@ -63,5 +69,5 @@ worker 标识为 `pullshit/0.2`；固定 Hermes 版本发送主模型会话头�
 
 新库使用 `state.sqlite3`。程序只打开新 schema。具体设备的启动服务、路径、凭据和运维脚本存放在 Git 忽略的 `local/`。
 
-最后修改时间：2026-10-12T18:39:19Z
+最后修改时间：2026-10-15T11:13:04Z
 模型署名：GPT-6

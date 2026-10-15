@@ -1,6 +1,6 @@
 # 模块与操作接口
 
-本文定义共享类型、业务模块、Hermes worker、CLI 和群命令的调用契约。默认值见[配置说明](configuration.md)，架构见[总体设计](design.md)，任务状态见[开发 TODO](phase-1-todo.md)。
+本文定义共享类型、业务模块、Hermes worker、CLI、操作员 HTTP 接口和群命令的调用契约。默认值见[配置说明](configuration.md)，架构见[总体设计](design.md)，任务状态见[开发 TODO](phase-1-todo.md)。
 
 ## 共享对象
 
@@ -72,6 +72,7 @@
 | 命令 | 输入与结果 |
 | --- | --- |
 | run | 启动单实例服务，Ctrl+C 退出 |
+| simulation-api --account ID [--port 18700] [--token-env PULLSHIT_SIMULATION_API_TOKEN] | 启动绑定登录账号的本机模拟转发 HTTP 接口，每环境一个实例 |
 | check-config [--ready] | 基础配置检查；ready 检查连接、模型和预算前置条件 |
 | status | 表行数、暂停状态、日预算和精简发送状态 |
 | candidates [--limit N] | 内容包编号、状态、记录数、期限和判断 |
@@ -85,6 +86,60 @@
 
 CLI 返回 JSON，错误输出到 stderr，退出码为成功 0、配置／参数错误 2、操作失败 1、人工中断 130。运行日志存于私有环境目录。
 
+## 模拟转发 HTTP 接口
+
+`simulation-api` 固定监听 `127.0.0.1`，默认端口 18700。所有路径要求 `Authorization: Bearer TOKEN`，token 由 `--token-env` 指定的环境变量提供，至少 32 字符。HTTP 响应使用 UTF-8 JSON 和 `Cache-Control: no-store`。
+
+| 方法与路径 | 行为 |
+| --- | --- |
+| GET /health | 返回接口进程就绪状态；QQ 连接由实际发送验证 |
+| POST /v1/simulation-forwards | 构造并发送一张明示模拟的双节点合并转发卡片 |
+| GET /v1/simulation-forwards/REQUEST_ID | 查询保存的发送回执和回读结果 |
+
+POST 使用 `Content-Type: application/json`，请求体最多 16384 字节，同时提供 `Idempotency-Key`：8–100 个 ASCII 字母、数字、下划线或连字符。请求体字段如下：
+
+| 字段 | 类型与约束 |
+| --- | --- |
+| qq | 十进制字符串或整数，正数且最多 20 位，指定模拟节点的 QQ 字段 |
+| content | 1–2000 字符的非空白文本，UTF-8 最多 8000 字节；CQ 字符串作为普通文字发送 |
+| group_id | 已授权目标群 ID；唯一目标时可省略，多目标时必填 |
+
+其他字段和重复 JSON 字段返回 400。首节点由机器人说明「模拟测试、非本人发言」，第二节点的昵称附带「模拟测试」，正文为请求的纯文本。模拟说明固定保留。发送前核对预期登录账号，并复查目标授权、auto 模式、发送开关及持久暂停；接口每进程每分钟接受最多 5 次新发送尝试。模拟发送使用操作员限流，自动策展的批数、间隔和日额度由原发布队列单独计量；接口不调用模型。
+
+```bash
+curl --fail-with-body -sS http://127.0.0.1:18700/v1/simulation-forwards \
+  -H "Authorization: Bearer ${PULLSHIT_SIMULATION_API_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: example-forward-20261015-001' \
+  --data '{"qq":"900401","content":"我要好好学习","group_id":"900201"}'
+```
+
+示例 QQ 与群号用于展示参数结构，实际调用填写授权环境中的值。新发送成功返回 201；响应示例：
+
+```json
+{
+  "request_id": "example-forward-20261015-001",
+  "status": "sent",
+  "simulation": true,
+  "group_id": "900201",
+  "requested_qq": "900401",
+  "message_id": "12345",
+  "observed_qq": "900401",
+  "identity_verified": true,
+  "content_verified": true,
+  "disclosure_verified": true,
+  "retry_safe": false
+}
+```
+
+`sent` 表示收到发送回执。`identity_verified`、`content_verified`、`disclosure_verified` 分别核对回读节点的 QQ、正文和说明；回读不可用时为 null，并附 `verification_error=readback_unavailable`。平台返回的身份可能与请求字段不同，此时保留 `sent` 与消息回执，`identity_verified=false`，实际值见 `observed_qq`。这些字段验证消息的构造与回读效果，真实外层发送者为机器人。
+
+相同请求键与相同参数复用回执，成功返回 200；不同参数使用同一键返回 409。发送前原子保存 `unknown` 意图，收到回执后立即保存，再执行回读。断线、超时或进程中断的结果返回／保留 `unknown`（202），同键查询或重放均保留结果。`retry_safe=false` 提醒调用方先核对群消息及回执；自动换键重发可能产生重复消息。明确平台拒绝或连接后规则变化记为 `failed`（502），同键复用该结果。
+
+其他响应包括：400 参数错误、401 认证失败、403 未授权目标或禁止发送、404 无此路径或回执、413 请求体超限、415 内容类型错误、429 操作员限流、503 存储容量或服务不可用。认证失败及验证拒绝不会发送消息。
+
+幂等记录位于当前环境数据库同目录的 `simulation-receipts.json`，原子替换、权限 600，最多 500 条，保留 7 天；只保存请求摘要、目标／QQ 字段、消息回执和验证结果。每分钟清理过期记录；容量满时返回 503 并保留有效记录。新操作使用新的请求键；在保留期内用同键恢复查询。接口日志与回执文件不保存请求正文。平台收到的消息遵循平台的存储行为。
+
 ## 群命令与权限
 
 - `/搬`：在授权源群顶层消息中引用一条消息，进入候选流程。
@@ -94,5 +149,5 @@ CLI 返回 JSON，错误输出到 stderr，退出码为成功 0、配置／参�
 
 引用正文、合并转发节点、OCR 和模型输入中的命令保持为素材。管理员命令通过真实事件的发送者校验；普通成员可以提供偏好反馈，硬规则由管理员配置。
 
-最后修改时间：2026-10-15T07:28:46Z
+最后修改时间：2026-10-15T11:13:04Z
 模型署名：GPT-6

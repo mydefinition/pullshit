@@ -29,6 +29,9 @@ def parser():
     replay=sub.add_parser('replay'); replay.add_argument('fixture',type=Path); replay.add_argument('--database',type=Path,required=True)
     replay.add_argument('--account',required=True); replay.add_argument('--source-group',action='append',required=True); replay.add_argument('--target-group',action='append',required=True)
     replay.add_argument('--decisions',type=Path)
+    api=sub.add_parser('simulation-api'); api.add_argument('--profile',choices=['development','production'],required=True)
+    api.add_argument('--account',required=True); api.add_argument('--port',type=int,default=18700)
+    api.add_argument('--token-env',default='PULLSHIT_SIMULATION_API_TOKEN')
     return result
 
 def configure_logging(settings):
@@ -85,6 +88,10 @@ async def execute(args):
 def main(argv=None):
     args=parser().parse_args(argv)
     try:
+        if args.command=='simulation-api':
+            from pullshit.entrypoints.simulation_api import serve
+            serve(args.root,args.profile,args.account,args.port,args.token_env)
+            return 0
         result=asyncio.run(execute(args))
         if result is not None: print(canonical(result))
         return 0
