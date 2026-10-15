@@ -75,7 +75,6 @@ class Publisher:
         rows=[]
         for index,(nodes,media_bytes) in enumerate(chunks):
             nodes=copy.deepcopy(nodes)
-            nodes[0]['data']['content'].insert(0,{'type':'text','data':{'text':f'[内容 {bundle.bundle_id[:8]} · {index+1}/{len(chunks)}]\n'}})
             estimated=len(canonical(nodes).encode())+4*math.ceil(media_bytes/3)+512*len(nodes)
             row={'delivery_id':digest([bundle.sources[0].account_id,target,bundle.fingerprint,index]),
                  'account_id':bundle.sources[0].account_id,'group_id':target,'bundle_id':bundle.bundle_id,'fingerprint':bundle.fingerprint,

@@ -18,8 +18,11 @@ class PublishingTests(Workspace):
                 store,bundle,publisher,gateway,ids=self.prepare(count)
                 rows=[store.get_delivery(i) for i in ids]
                 self.assertEqual([len(r['nodes']) for r in rows],expected)
-                texts=[node['data']['content'][-1]['data']['text'] for row in rows for node in row['nodes']]
-                self.assertTrue(texts[-1].endswith(str(count)))
+                nodes=[node for row in rows for node in row['nodes']]
+                self.assertEqual([node['data']['content'] for node in nodes],
+                                 [message.segments for message in bundle.messages])
+                self.assertEqual([node['data']['user_id'] for node in nodes],
+                                 [message.user_id for message in bundle.messages])
                 self.assertEqual(publisher.enqueue(bundle,'900201',self.eligible()),ids)
     def test_spacing_partial_success_pause_and_resume(self):
         store,bundle,publisher,gateway,ids=self.prepare(201)
