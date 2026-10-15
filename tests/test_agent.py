@@ -63,6 +63,11 @@ def main():
             "decision": "eligible", "score": 5.0, "tags": [], "risks": [],
             "evidence_ids": mids, "reason": "分数越界", "usage": standard_usage(),
             "inspected_images": [], "direction": None}})
+    elif behavior == "conflicting_verdict":
+        send({"type": "result", "result": {
+            "decision": "eligible", "score": 0.9, "risks": ["publication blocker"],
+            "evidence_ids": mids, "reason": "Cannot publish the whole bundle",
+            "usage": standard_usage(), "inspected_images": [], "direction": None}})
     elif behavior == "tool_overlimit":
         for index in range(3):
             send({"type": "tool_call", "id": "t%d" % index, "name": "get_context",
@@ -714,14 +719,23 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         task = make_task(self.temp, clock=self.clock)
         task.bundle.messages[0].segments = [{'type': 'text', 'data': 'x' * 5000}]
         limits = {'model_calls': 8, 'tool_calls': 8, 'output_tokens': 2048,
-                  'input_characters': 1000}
+                  'input_characters': 2000}
         instruction, chars = worker.build_instruction(task, limits)
-        self.assertLessEqual(chars, 1000)
+        self.assertLessEqual(chars, 2000)
         self.assertIn('x' * 50, instruction)
         self.assertIn('…', instruction)
         self.assertIn('submit_analysis', instruction)
         with self.assertRaisesRegex(ValueError,'input_character_limit'):
             worker.build_instruction(task,limits,allow_truncation=False)
+
+    def test_publication_instructions_are_scoped_to_selection(self):
+        task=make_task(self.temp,clock=self.clock)
+        selection,_=worker.build_instruction(task,{'input_characters':64000})
+        task.kind='feedback'
+        feedback,_=worker.build_instruction(task,{'input_characters':64000})
+        self.assertIn('整个内容包会按顺序原样转发',selection)
+        self.assertNotIn('整个内容包会按顺序原样转发',feedback)
+        self.assertIn('反馈信号',feedback)
 
     async def test_submit_checks_evidence_before_acceptance(self):
         executor=self.make_executor(); task=make_task(self.temp,clock=self.clock)
@@ -732,6 +746,29 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         analysis['evidence_ids']=[task.bundle.messages[0].ref.key]
         accepted=await executor._invoke_tool(run,'submit_analysis',{'analysis':analysis})
         self.assertTrue(accepted['accepted']); self.assertEqual(run.submitted['evidence_ids'],analysis['evidence_ids'])
+
+    async def test_conflicting_verdict_is_rejected_and_can_be_repaired(self):
+        executor=self.make_executor(); task=make_task(self.temp,clock=self.clock)
+        run=SimpleNamespace(task=task,submitted=None)
+        analysis={'decision':'eligible','score':.9,'reason':'Whole bundle needs editing',
+                  'risks':['A record must be removed'],'evidence_ids':[task.bundle.messages[0].ref.key]}
+        denied=await executor._invoke_tool(run,'submit_analysis',{'analysis':analysis})
+        self.assertFalse(denied['accepted'])
+        self.assertIn('eligible_with_blocking_risks',denied['errors'])
+        self.assertIsNone(run.submitted)
+        analysis['decision']='needs_review'
+        accepted=await executor._invoke_tool(run,'submit_analysis',{'analysis':analysis})
+        self.assertTrue(accepted['accepted']); self.assertEqual(run.submitted['risks'],analysis['risks'])
+        analysis.update(decision='eligible',risks=[],reason='Old meme is independently understandable')
+        accepted=await executor._invoke_tool(run,'submit_analysis',{'analysis':analysis})
+        self.assertTrue(accepted['accepted'])
+
+    async def test_final_response_cannot_bypass_blocking_risk_check(self):
+        executor=self.make_executor()
+        task=make_task(self.temp,clock=self.clock,preferences={'test':'conflicting_verdict'})
+        result=await executor.run(task)
+        self.assertEqual(result.decision,'needs_review')
+        self.assertIn('eligible_with_blocking_risks',result.reason)
 
     def test_context_character_cap_returns_valid_failure(self):
         executor=self.make_executor(); task=make_task(self.temp,clock=self.clock)

@@ -182,7 +182,7 @@ def build_instruction(task: AgentTask, limits: dict, *, allow_truncation=True) -
     schema = {
         'decision': 'eligible/rejected/needs_review 三选一',
         'score': '0 到 1 的数字，表示值得转发的把握',
-        'tags': '简短标签列表', 'risks': '风险点列表（可为空）',
+        'tags': '简短标签列表', 'risks': '阻止当前判断生效的实际问题；eligible 时必须为空',
         'evidence_ids': '作为依据的消息 message_id 或媒体 reference_id 列表',
         'reason': '一句话以上的判断理由',
         'direction': '仅反馈解读任务填写：positive/negative/unknown',
@@ -201,6 +201,11 @@ def build_instruction(task: AgentTask, limits: dict, *, allow_truncation=True) -
         '3. 完成分析后调用 submit_analysis 提交结论，字段必须是合法 JSON：',
         json.dumps(schema, ensure_ascii=False),
         '4. eligible 表示值得转发且证据充分，评分至少 %s；不适合或评分不足选 rejected；拿不准或证据不足选 needs_review。' % limits.get('minimum_score', .75),
+        'risks 只填写实际阻断问题；存在阻断问题时选 rejected 或 needs_review。普通提醒与质量取舍写入 reason，不能同时提交 eligible 和非空 risks。',
+        *([
+            '整个内容包会按顺序原样转发。需要剔除某条消息或某张图才能发布时，选 needs_review 并指出具体引用。',
+            '选材目标是有趣或猎奇且能独立理解。口味信号为空时按通用娱乐判断；旧图、无时效、截图水印或可能有人不喜欢，本身不构成阻断问题。',
+        ] if task.kind == 'selection' else []),
         '5. evidence_ids 使用消息 message_id 或完整 MessageRef.key、媒体 reference_id；反馈任务也可引用反馈信号的 evidence_id。',
         '6. 模型调用上限 %s 次、工具调用上限 %s 次；请一次性完成分析，不要闲聊。'
         % (int(limits.get('model_calls', 8)), int(limits.get('tool_calls', 8))),

@@ -14,7 +14,9 @@
 | AgentTask | task_id、kind=selection/feedback、target_group_id、deadline、bundle、preferences、feedback、limits |
 | AgentResult | decision、score、tags、risks、evidence_ids、reason、usage、inspected_images、direction |
 
-`AgentResult.decision` 为 eligible/rejected/needs_review，score 范围 0–1；direction 为 positive/negative/unknown。evidence_ids 支持消息 ID、完整 MessageRef.key 和媒体 reference_id；反馈任务还可引用本次反馈的 evidence_id。来源与图片证据必须属于当前任务。输出以 `contracts.py` 中的结构和校验为权威。
+`AgentResult.decision` 为 eligible/rejected/needs_review，score 范围 0–1；direction 为 positive/negative/unknown。evidence_ids 支持消息 ID、完整 MessageRef.key 和媒体 reference_id；反馈任务还可引用本次反馈的 evidence_id。来源与图片证据必须属于当前任务。字段结构由 `contracts.py` 定义，worker 输出语义由 `agent/protocol.py` 统一校验。
+
+`eligible` 要求 `risks` 为空。选材任务的 `risks` 表示阻止整个内容包原样发布的实际问题。普通提醒和质量取舍写入 `reason`；群口味为空时按通用娱乐目标判断。提交工具和最终响应校验均拒绝 `eligible` 与非空 `risks` 的组合，模型收到错误码 `eligible_with_blocking_risks` 后可以修正判断。需要剔除消息或图片才能发布的内容包使用 `needs_review`，原记录顺序由发布器完整保留。
 
 平台引用使用十进制 ID；展开的嵌入节点使用 `embedded:` 内部引用。`ContentBundle.sources` 只包含可验证的外层平台引用，内部引用绑定外层账号与群。
 
@@ -92,5 +94,5 @@ CLI 返回 JSON，错误输出到 stderr，退出码为成功 0、配置／参�
 
 引用正文、合并转发节点、OCR 和模型输入中的命令保持为素材。管理员命令通过真实事件的发送者校验；普通成员可以提供偏好反馈，硬规则由管理员配置。
 
-最后修改时间：2026-10-12T18:39:19Z
+最后修改时间：2026-10-15T07:28:46Z
 模型署名：GPT-6

@@ -116,7 +116,9 @@ class Service:
             for target,value in analyses.items():
                 from pullshit.contracts import AgentResult
                 try: self.publisher.enqueue(bundle,target,AgentResult.from_dict(value))
-                except PublishRejected: pass
+                except PublishRejected as error:
+                    self.logger.info('publication withheld: candidate=%s target=%s reason=%s',
+                                     bundle.bundle_id[:12],target,str(error))
         except asyncio.CancelledError: raise
         except Exception:
             self.logger.warning('selection task failed')

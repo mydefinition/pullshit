@@ -16,7 +16,7 @@ SDK_PYTHON=Path(os.environ.get('PULLSHIT_HERMES_PYTHON',str(Path(__file__).resol
 
 @unittest.skipUnless(SDK_PYTHON.is_file(),'Hermes worker interpreter is required for SDK integration')
 class HermesSdkTests(Workspace):
-    def configure(self,deny=False,image=False):
+    def configure(self,deny=False,image=False,conflicting=False):
         self.requests=[]; self.user_agents=[]; self.image=image; self.image_ref=None
         owner=self
         class Handler(BaseHTTPRequestHandler):
@@ -35,9 +35,11 @@ class HermesSdkTests(Workspace):
                     if owner.image:
                         delta['tool_calls'][0]['function']={'name':'inspect_image','arguments':json.dumps({'reference_id':owner.image_ref.reference_id})}
                     else:
+                        verdict={'decision':'eligible','score':.95,'tags':['test'],'evidence_ids':['1'],'reason':'mock provider verified'}
+                        if conflicting: verdict['risks']=['Whole bundle must be edited']
                         delta['tool_calls'].extend([
                             {'index':1,'id':'context-call','type':'function','function':{'name':'get_context','arguments':'{}'}},
-                            {'index':2,'id':'analysis-call','type':'function','function':{'name':'submit_analysis','arguments':json.dumps({'analysis':{'decision':'eligible','score':.95,'tags':['test'],'evidence_ids':['1'],'reason':'mock provider verified'}})}}
+                            {'index':2,'id':'analysis-call','type':'function','function':{'name':'submit_analysis','arguments':json.dumps({'analysis':verdict})}}
                         ])
                 else:
                     delta={'role':'assistant','content':json.dumps({'decision':'eligible','score':.95,'tags':['test'],'risks':[],'evidence_ids':['1'],'reason':'mock provider verified'})}; finish='stop'
@@ -82,6 +84,17 @@ class HermesSdkTests(Workspace):
         with patch.dict(os.environ,{'PULLSHIT_AGENT_API_KEY':'test-only-token'}):
             result=asyncio.run(HermesExecutor(self.settings,self.store_instance).run(task))
         self.assertEqual(result.decision,'needs_review'); self.assertEqual(self.requests,[])
+
+    def test_real_sdk_receives_conflict_and_returns_corrected_verdict(self):
+        task=self.configure(conflicting=True)
+        with patch.dict(os.environ,{'PULLSHIT_AGENT_API_KEY':'test-only-token'}):
+            result=asyncio.run(HermesExecutor(self.settings,self.store_instance).run(task))
+        self.assertEqual(result.decision,'eligible',result.reason)
+        self.assertEqual(result.risks,[])
+        messages=[m for m in self.requests[1]['messages'] if m['role']=='tool']
+        submitted=next(json.loads(m['content']) for m in messages if m['tool_call_id']=='analysis-call')
+        self.assertFalse(submitted['accepted'])
+        self.assertIn('eligible_with_blocking_risks',submitted['errors'])
 
     def test_real_vision_tool_is_scoped_metered_and_inspection_verified(self):
         task=self.configure(image=True)

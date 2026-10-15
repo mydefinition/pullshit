@@ -41,6 +41,8 @@ def normalize_analysis(raw, kind: str) -> tuple[dict | None, list[str]]:
     errors: list[str] = []
     if not result.reason.strip():
         errors.append('missing_reason')
+    if result.decision == 'eligible' and result.risks:
+        errors.append('eligible_with_blocking_risks')
     if kind == 'feedback':
         if result.direction not in DIRECTIONS:
             errors.append('schema_direction')
