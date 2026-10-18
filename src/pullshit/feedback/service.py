@@ -10,6 +10,14 @@ class FeedbackService:
         self.settings,self.store,self.agent,self.clock=settings,store,agent,clock
         self.content=content
 
+    @staticmethod
+    def addressed_to_bot(message):
+        """Accept a top-level platform mention of the message's receiving account."""
+        return bool(message and any(segment.get('type')=='at'
+                    and isinstance(segment.get('data'),dict)
+                    and str(segment['data'].get('qq',''))==message.ref.account_id
+                    for segment in message.segments))
+
     def _signal(self,event,subject,kind,direction,payload,active=True):
         return {'signal_id':digest([event.ref.account_id,event.ref.group_id,event.ref.message_id,event.user_id,kind,payload.get('reaction')]),
                 'account_id':event.ref.account_id,'group_id':event.ref.group_id,'bundle_id':subject.get('bundle_id'),
@@ -20,7 +28,7 @@ class FeedbackService:
 
     def capture(self,event):
         """Persist a quoted feedback request before asynchronous interpretation."""
-        if (event.kind!='message' or not event.message or event.user_id==event.ref.account_id
+        if (event.kind!='message' or not self.addressed_to_bot(event.message) or event.user_id==event.ref.account_id
                 or event.ref.group_id not in self.settings.sources|self.settings.targets
                 or event.occurred_at+self.settings.data['retention']['content_days']*DAY<=self.clock()):
             return None
@@ -31,7 +39,8 @@ class FeedbackService:
         except (ValueError,TypeError): return None
         kind='explicit' if text in {'/喜欢','/少来点'} else 'reply'
         signal=self._signal(event,{},kind,'unknown',{'text':text,'target_message_id':target.message_id,
-                            'feedback_message_id':event.ref.message_id,'event_id':event.event_id,'processing':'pending'})
+                            'feedback_message_id':event.ref.message_id,'event_id':event.event_id,
+                            'addressed_to_bot':True,'processing':'pending'})
         self.store.put_feedback(signal)
         return self.store.get_feedback(signal['signal_id'],now=self.clock())
 
@@ -40,8 +49,18 @@ class FeedbackService:
         events=[]
         for row in rows:
             payload=row['payload'];ref=MessageRef(account_id,row['group_id'],payload['feedback_message_id'])
+            if payload.get('addressed_to_bot') is not True:
+                original=self.store.get_message(ref,now=self.clock())
+                if not self.addressed_to_bot(original):
+                    self.store.complete_feedback(row['signal_id'],payload={**payload,'processing':'done',
+                        'recognized':False,'ordinary_chat':True,'addressed_to_bot':False,
+                        'reason':'feedback_requires_bot_mention'},direction='unknown',tags=[],now=self.clock())
+                    continue
+                payload={**payload,'addressed_to_bot':True}
+                self.store.complete_feedback(row['signal_id'],payload=payload,now=self.clock())
             message=ChatMessage(ref,row['user_id'],'',row['occurred_at'],[
                 {'type':'reply','data':{'id':payload['target_message_id']}},
+                {'type':'at','data':{'qq':account_id}},
                 {'type':'text','data':{'text':payload['text']}}],expires_at=row['expires_at'])
             events.append(ChatEvent('message',ref,row['occurred_at'],payload['event_id'],row['user_id'],message))
         return events

@@ -15,7 +15,7 @@ class ReplayTests(Workspace):
         base={'post_type':'message','message_type':'group','self_id':900001,'user_id':900401,'group_id':900101}
         rows=[{**base,'time':100,'message_id':1,'message':[{'type':'text','data':{'text':'有趣的离线回放内容，验证选择、发送和精确反馈'}}]},
               {**base,'time':101,'message_id':2,'message':[{'type':'reply','data':{'id':'1'}},{'type':'text','data':{'text':'/搬'}}]},
-              {**base,'time':102,'group_id':900201,'message_id':3,'message':[{'type':'reply','data':{'id':'1001'}},{'type':'text','data':{'text':'/喜欢'}}]}]
+              {**base,'time':102,'group_id':900201,'message_id':3,'message':[{'type':'reply','data':{'id':'1001'}},{'type':'at','data':{'qq':'900001'}},{'type':'text','data':{'text':'/喜欢'}}]}]
         self.fixture.write_text('\n'.join(json.dumps(row,ensure_ascii=False) for row in rows))
     def test_cli_replay_selection_publication_feedback_and_duplicate_replay(self):
         decisions=self.root/'decisions.json'; decisions.write_text(json.dumps({'*':{'decision':'eligible','score':.95,'tags':['test'],'selections':[{'publish_ids':['U001'],'context_status':'complete','completeness_reason':'independent text','reason':'test'}]}}))

@@ -184,5 +184,15 @@ Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/
 
 启动前核对、配置备份和部署结果保存在 Git 忽略的 `local/ops/pullshit/run/systemone-startup-precheck.json`、`local/ops/pullshit/run/systemone-deployment.json`。本次操作仅修改私有运行配置和启用标记，验证采用配置、模型健康、进程、QQ 认证／群列表和已有自然消息记录。
 
-最后修改时间：2026-10-18T07:00:24Z
+## 2026-10-18T11:38:54.703524Z @机器人反馈触发限制验证与部署
+
+反馈入口要求当前消息含顶层 OneBot at 片段，qq 精确等于接收消息的机器人账号；自然引用与 `/喜欢`／`/少来点` 共用条件。确认发送复查该条件。持久恢复保留经过验证的提及标记，历史 pending 根据缓存原消息确认；缺少有效提及证据时完成为 unknown。普通源群内容继续进入观察窗口，管理命令及搬运提名沿用其明确命令入口。
+
+相关 24 项测试及回放 3 项测试通过。完整检查首次发现回放反馈样本缺少 @，更新样本后最终完整 214 项测试通过（108.396 秒），33 个模块与发行包一致。新增 7 项测试验证无提及、@他人／全体、正文伪提及、嵌入节点提及、整数 qq、正确 @ 的正常处理、持久恢复和发送确认；独立的实际用户消息隔离回放验证「@他人，试试这个」不调用模型且不写反馈，补上 @机器人后允许捕获。
+
+部署短暂停止业务与模拟接口，QQ 隧道保持运行。安装已测 wheel 后校验生产 ready 配置、依赖及 33 个模块哈希，随后启动两个业务进程。业务、QQ 隧道、模拟接口均 RUNNING，预期 QQ 账号、全部 6 个来源／2 个目标及 10 个广播组合检查通过。私有配置逐字节保持一致，自动发送和部署守护保持开启；候选 StartLux SystemOne 与反馈 DeepSeek LLM 沿用既有配置。验证没有额外向 QQ 发送测试消息，群内自然触发验收统一见[开发 TODO](phase-1-todo.md)。
+
+发行 SHA-256：`e51741dad5bb9b2fb0d1b4122c99d53e0766d4bdd58701c93944611bf95669ee`。测试、原消息隔离回放和部署证据分别为 Git 忽略的 `local/ops/pullshit/run/mention-feedback-release.json`、`local/ops/pullshit/run/mention-feedback-preflight.json`、`local/ops/pullshit/run/mention-feedback-deployment.json`；部署记录保留旧 wheel 与配置快照以供恢复。
+
+最后修改时间：2026-10-18T11:39:58Z
 模型署名：GPT-6

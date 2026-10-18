@@ -19,7 +19,72 @@ class FeedbackTests(Workspace):
         ref=MessageRef('900001',group,message_id)
         return ChatEvent('message',ref,self.current,'natural-'+message_id,'900301',
             ChatMessage(ref,'900301','member',self.current,[{'type':'reply','data':{'id':'41'}},
+                        {'type':'at','data':{'qq':'900001'}},
                         {'type':'text','data':{'text':text}}]))
+
+    def test_feedback_requires_real_direct_bot_mention_before_capture_or_model(self):
+        store=self.store()
+        class Agent:
+            calls=0
+            async def run(inner,task):
+                inner.calls+=1
+                return AgentResult('eligible',.99,reason='positive',direction='positive')
+        agent=Agent();service=FeedbackService(self.settings,store,agent,clock=lambda:self.current)
+        variants=[[], [{'type':'at','data':{'qq':'900401'}}],
+                  [{'type':'at','data':{'qq':'all'}}],
+                  [{'type':'text','data':{'text':'@900001'}}],
+                  [{'type':'node','data':{'content':[{'type':'at','data':{'qq':'900001'}}]}}]]
+        for index,extra in enumerate(variants):
+            with self.subTest(extra=extra):
+                event=self.natural_feedback(store,'试试这个',message_id=str(600+index))
+                event.message.segments=[segment for segment in event.message.segments if segment['type']!='at']+extra
+                self.assertIsNone(asyncio.run(service.apply(event)))
+        command=self.natural_feedback(store,'/喜欢',message_id='699')
+        command.message.segments=[s for s in command.message.segments if s['type']!='at']
+        self.assertIsNone(service.capture(command))
+        self.assertEqual(agent.calls,0)
+        self.assertEqual(store.feedback_since('900001','900101',0,now=self.current),[])
+
+    def test_numeric_bot_mention_is_accepted(self):
+        store=self.store();event=self.natural_feedback(store,'/喜欢')
+        event.message.segments[1]['data']['qq']=900001
+        service=FeedbackService(self.settings,store,clock=lambda:self.current)
+        signal=service.capture(event)
+        self.assertTrue(signal['payload']['addressed_to_bot'])
+
+    def test_pending_recovery_retains_verified_mention_without_cached_message(self):
+        store=self.store();event=self.natural_feedback(store)
+        service=FeedbackService(self.settings,store,clock=lambda:self.current)
+        signal=service.capture(event)
+        self.assertIsNone(store.get_message(event.ref,now=self.current))
+        pending=service.pending_events('900001')
+        self.assertEqual(len(pending),1)
+        self.assertTrue(service.addressed_to_bot(pending[0].message))
+        self.assertEqual(service.capture(pending[0])['signal_id'],signal['signal_id'])
+
+    def test_legacy_pending_without_bot_mention_is_closed_without_model(self):
+        store=self.store();event=self.natural_feedback(store)
+        service=FeedbackService(self.settings,store,clock=lambda:self.current)
+        signal=service.capture(event)
+        payload={k:v for k,v in signal['payload'].items() if k!='addressed_to_bot'}
+        service.store.complete_feedback(signal['signal_id'],payload=payload,now=self.current)
+        self.assertEqual(service.pending_events('900001'),[])
+        result=store.get_feedback(signal['signal_id'],now=self.current)
+        self.assertEqual(result['direction'],'unknown')
+        self.assertEqual(result['payload']['processing'],'done')
+        self.assertEqual(result['payload']['reason'],'feedback_requires_bot_mention')
+        self.assertEqual(service.pending_events('900001'),[])
+
+    def test_legacy_pending_checks_cached_top_level_mention(self):
+        store=self.store();event=self.natural_feedback(store);store.put_message(event.message)
+        service=FeedbackService(self.settings,store,clock=lambda:self.current)
+        signal=service.capture(event)
+        payload={k:v for k,v in signal['payload'].items() if k!='addressed_to_bot'}
+        service.store.complete_feedback(signal['signal_id'],payload=payload,now=self.current)
+        pending=service.pending_events('900001')
+        self.assertEqual(len(pending),1)
+        self.assertTrue(service.addressed_to_bot(pending[0].message))
+        self.assertTrue(store.get_feedback(signal['signal_id'],now=self.current)['payload']['addressed_to_bot'])
 
     def test_natural_feedback_on_unpublished_source_message(self):
         store=self.store(); event=self.natural_feedback(store); tasks=[]
@@ -99,7 +164,7 @@ class FeedbackTests(Workspace):
         service=FeedbackService(self.settings,store,clock=lambda:self.current)
         def event(group):
             ref=MessageRef('900001',group,'501')
-            return ChatEvent('message',ref,self.current,'feedback','900301',ChatMessage(ref,'900301','member',self.current,[{'type':'reply','data':{'id':'1001'}},{'type':'text','data':{'text':'/喜欢'}}]))
+            return ChatEvent('message',ref,self.current,'feedback','900301',ChatMessage(ref,'900301','member',self.current,[{'type':'reply','data':{'id':'1001'}},{'type':'at','data':{'qq':'900001'}},{'type':'text','data':{'text':'/喜欢'}}]))
         self.assertIsNotNone(asyncio.run(service.apply(event('900201'))))
         asyncio.run(service.apply(event('900201')))
         self.assertEqual(len(store.feedback_since('900001','900201',0,now=self.current)),1)

@@ -166,6 +166,7 @@ class Service:
         return True
 
     async def feedback_reply(self,event,signal):
+        if not self.feedback.addressed_to_bot(event.message): return
         if not signal or signal['direction'] not in {'positive','negative'} or signal['kind']=='reaction': return
         if signal['payload'].get('ack_state'): return
         settings=self.effective(); current=self.clock(); group=event.ref.group_id

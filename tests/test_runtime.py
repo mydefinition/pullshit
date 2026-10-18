@@ -25,11 +25,33 @@ class RuntimeTests(Workspace):
             selected=service.store.get_candidate(row['bundle_id'],now=self.current)['bundle']
             self.assertEqual([m.ref.message_id for m in selected.messages],['2'])
 
+    def test_unaddressed_quote_stays_in_source_window_without_feedback(self):
+        service=self.service();original=self.bundle().messages[0];service.store.put_message(original)
+        ref=MessageRef('900001','900101','601')
+        message=ChatMessage(ref,'900301','member',self.current,[
+            {'type':'reply','data':{'id':original.ref.message_id}},
+            {'type':'at','data':{'qq':'900401'}},
+            {'type':'text','data':{'text':'试试这个'}}])
+        asyncio.run(service.handle(ChatEvent('message',ref,self.current,'unaddressed','900301',message)))
+        self.assertEqual(service.agent.calls,0)
+        self.assertTrue(service.feedback_queue.empty())
+        self.assertEqual(service.store.feedback_since('900001','900101',0,now=self.current),[])
+        self.assertTrue(service.window.due(self.current,force=True))
+        self.assertEqual(service.gateway.sent,[])
+
+    def test_feedback_acknowledgement_requires_direct_bot_mention(self):
+        service=self.service();ref=MessageRef('900001','900101','602')
+        message=ChatMessage(ref,'900301','member',self.current,[{'type':'text','data':{'text':'我喜欢这个'}}])
+        event=ChatEvent('message',ref,self.current,'ack-guard','900301',message)
+        asyncio.run(service.feedback_reply(event,{'direction':'positive','kind':'reply','payload':{}}))
+        self.assertEqual(service.gateway.sent,[])
+
     def test_natural_feedback_is_persisted_acknowledged_and_used_by_selection(self):
         service=self.service();original=self.bundle().messages[0];service.store.put_message(original)
         ref=MessageRef('900001','900101','501')
         event=ChatEvent('message',ref,self.current,'natural','900301',
             ChatMessage(ref,'900301','member',self.current,[{'type':'reply','data':{'id':original.ref.message_id}},
+                       {'type':'at','data':{'qq':'900001'}},
                        {'type':'text','data':{'text':'我喜欢这个'}}]))
         tasks=[]
         class Agent:
@@ -106,7 +128,7 @@ class RuntimeTests(Workspace):
             await service.analyze(candidates[0]); await service.publisher.dispatch_once(); await service.publisher.dispatch_once()
             ref=MessageRef('900001','900201','5001')
             receipt=next(row['message_id'] for row in service.store.deliveries() if row['group_id']=='900201')
-            message=ChatMessage(ref,'900301','member',self.current,[{'type':'reply','data':{'id':receipt}},{'type':'text','data':{'text':'/喜欢'}}])
+            message=ChatMessage(ref,'900301','member',self.current,[{'type':'reply','data':{'id':receipt}},{'type':'at','data':{'qq':'900001'}},{'type':'text','data':{'text':'/喜欢'}}])
             await service.feedback.apply(ChatEvent('message',ref,self.current,'feedback','900301',message))
         asyncio.run(workflow())
         self.assertEqual(service.agent.calls,1)
