@@ -17,7 +17,8 @@ MAX_PROTOCOL_LINE = 1 << 20
 DECISIONS = ('eligible', 'rejected', 'needs_review')
 DIRECTIONS = ('positive', 'negative', 'unknown')
 
-_RESULT_FIELDS = ('decision', 'score', 'tags', 'risks', 'evidence_ids', 'reason', 'direction')
+_RESULT_FIELDS = ('decision', 'score', 'tags', 'risks', 'evidence_ids', 'reason', 'direction',
+                  'selections', 'snapshot_id', 'snapshot_revision')
 
 
 def normalize_analysis(raw, kind: str) -> tuple[dict | None, list[str]]:
@@ -46,6 +47,8 @@ def normalize_analysis(raw, kind: str) -> tuple[dict | None, list[str]]:
     if kind == 'feedback':
         if result.direction not in DIRECTIONS:
             errors.append('schema_direction')
+        if result.selections:
+            errors.append('feedback_with_selections')
     else:
         result.direction = None
     if errors:
@@ -54,4 +57,6 @@ def normalize_analysis(raw, kind: str) -> tuple[dict | None, list[str]]:
         'decision': result.decision, 'score': result.score, 'tags': list(result.tags),
         'risks': list(result.risks), 'evidence_ids': list(result.evidence_ids),
         'reason': result.reason, 'direction': result.direction,
+        'selections': result.selections, 'snapshot_id': result.snapshot_id,
+        'snapshot_revision': result.snapshot_revision,
     }, []

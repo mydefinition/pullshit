@@ -48,7 +48,7 @@ async def execute(args):
     settings=load_settings(args.root,args.profile)
     if args.command=='check-config':
         if args.ready: settings.validate_live()
-        return {'profile':args.profile,'valid':True,'ready':bool(args.ready),'sources':len(settings.sources),'targets':len(settings.targets),'routes':len(settings.routes)}
+        return {'profile':args.profile,'valid':True,'ready':bool(args.ready),'sources':len(settings.sources),'targets':len(settings.targets)}
     if args.command=='run':
         from pullshit.runtime.service import Service
         configure_logging(settings); return await Service(args.root,args.profile).run()

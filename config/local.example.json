@@ -5,8 +5,7 @@
   "authorization": {
     "source_group_ids": [],
     "target_group_ids": [],
-    "operator_qq_ids": [],
-    "routes": []
+    "operator_qq_ids": []
   },
   "agent": {
     "python": "",
@@ -29,6 +28,23 @@
     "task_budget_usd": 0.0,
     "input_usd_per_million": 0.0,
     "output_usd_per_million": 0.0,
-    "minimum_score": 0.75
+    "minimum_score": 0.75,
+    "selection": {
+      "api_format": "systemone",
+      "model": "startlux-decision-9b-autothink-q4km",
+      "base_url": "https://gosleep.top/startlux",
+      "api_key_env": "PULLSHIT_STARTLUX_API_KEY",
+      "free": true,
+      "timeout_seconds": 120,
+      "max_input_characters": 4000
+    },
+    "feedback": {
+      "api_format": "llm"
+    },
+    "decision": {
+      "max_units": 16,
+      "think_mode": "never",
+      "think_budget": 512
+    }
   }
 }

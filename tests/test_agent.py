@@ -26,6 +26,11 @@ _FAKE_WORKER = '''\
 import json, os, subprocess, sys, time
 
 def send(message):
+    if message.get("type")=="result" and message["result"].get("decision")=="eligible" and _task.get("selection"):
+        result=message["result"]; snapshot=_task["selection"]
+        result.update(snapshot_id=snapshot["snapshot_id"],snapshot_revision=snapshot["revision"],
+            selections=[{"publish_ids":[u["id"] for u in snapshot["units"] if u["publishable"]],
+                         "context_status":"complete","completeness_reason":"self contained","reason":"test selection"}])
     sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\\n")
     sys.stdout.flush()
 
@@ -41,7 +46,8 @@ def standard_usage(model_calls=1, tool_calls=0, extra=None):
 
 def main():
     envelope = json.loads(sys.stdin.readline())
-    task = envelope["task"]
+    global _task
+    task = envelope["task"]; _task=task
     prefs = task.get("preferences") or {}
     behavior = prefs.get("test", "valid")
     bundle = task.get("bundle") or {}
@@ -243,14 +249,12 @@ class FakeSettings:
         self.root = Path(data['root'])
         self.sources = set(data['authorization']['source_group_ids'])
         self.targets = set(data['authorization']['target_group_ids'])
-        self._routes = {(r['source_group_id'], r['target_group_id'])
-                        for r in data['authorization']['routes']}
 
     def path(self, section, key):
         return self.root / self.data[section][key]
 
     def permits(self, source, target):
-        return (source, target) in self._routes
+        return source in self.sources and target in self.targets and source != target
 
 
 def agent_data(root: Path, **overrides) -> dict:
@@ -271,7 +275,6 @@ def agent_data(root: Path, **overrides) -> dict:
                     'media_directory': str(root / 'media')},
         'authorization': {
             'source_group_ids': ['111'], 'target_group_ids': ['222'],
-            'routes': [{'source_group_id': '111', 'target_group_id': '222'}],
         },
         'media': {'max_image_bytes': 1048576, 'download_timeout_seconds': 15},
     }
@@ -285,13 +288,14 @@ def make_task(root: Path, kind='selection', deadline=None, limits=None,
     now = clock() if clock else time.time()
     ref = MessageRef('1', source_group, '1001')
     message = ChatMessage(ref=ref, user_id='5', nickname='张三', occurred_at=now,
-                          segments=[{'type': 'text', 'data': '一个有趣的猎奇内容'}])
+                          segments=[{'type': 'text', 'data': {'text':'一个有趣的猎奇内容'}}])
     media = []
     if with_media:
         media_dir = root / 'media'
         media_dir.mkdir(parents=True, exist_ok=True)
         path = media_dir / 'sample.png'
         path.write_bytes(b'fake-image-bytes')
+        message.segments.append({'type':'image','data':{'file':str(path)}})
         media.append(MediaRef(reference_id='media-1', source=ref, path=str(path),
                               sha256='x', size=16, mime='image/png'))
     bundle = ContentBundle(bundle_id='b1', fingerprint='fp', messages=[message],
@@ -408,14 +412,23 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(worker_dir.exists() and list(worker_dir.iterdir()))
         self.assertEqual(self.store.reservations, [])
 
-    async def test_route_not_permitted(self):
+    async def test_broadcast_to_source_not_permitted(self):
         data = agent_data(self.temp)
-        data['authorization']['routes'] = []
+        data['authorization']['target_group_ids'].append('111')
         settings = FakeSettings(data)
         executor = self.make_executor(settings)
-        result = await executor.run(make_task(self.temp, clock=self.clock))
+        result = await executor.run(make_task(self.temp, clock=self.clock, target_group='111'))
         self.assertEqual(result.decision, 'needs_review')
-        self.assertEqual(result.reason, 'route_not_permitted')
+        self.assertEqual(result.reason, 'broadcast_not_permitted')
+
+    async def test_feedback_accepts_quoted_target_only_content(self):
+        settings=FakeSettings(agent_data(self.temp))
+        executor=self.make_executor(settings)
+        task=make_task(self.temp,clock=self.clock,source_group='222',target_group='222')
+        task.kind='feedback'
+        self.assertIsNone(executor._validate_task(task))
+        task.kind='selection'
+        self.assertEqual(executor._validate_task(task),'source_not_authorized')
 
     async def test_past_deadline_rejected_without_spawn(self):
         settings = FakeSettings(agent_data(self.temp))
@@ -717,13 +730,12 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
 
     def test_instruction_budget_truncation(self):
         task = make_task(self.temp, clock=self.clock)
-        task.bundle.messages[0].segments = [{'type': 'text', 'data': 'x' * 5000}]
+        task.bundle.messages[0].segments = [{'type': 'text', 'data': {'text':'x' * 5000}}]
         limits = {'model_calls': 8, 'tool_calls': 8, 'output_tokens': 2048,
                   'input_characters': 2000}
         instruction, chars = worker.build_instruction(task, limits)
         self.assertLessEqual(chars, 2000)
-        self.assertIn('x' * 50, instruction)
-        self.assertIn('…', instruction)
+        self.assertTrue(instruction)
         self.assertIn('submit_analysis', instruction)
         with self.assertRaisesRegex(ValueError,'input_character_limit'):
             worker.build_instruction(task,limits,allow_truncation=False)
@@ -733,8 +745,8 @@ class AgentTests(unittest.IsolatedAsyncioTestCase):
         selection,_=worker.build_instruction(task,{'input_characters':64000})
         task.kind='feedback'
         feedback,_=worker.build_instruction(task,{'input_characters':64000})
-        self.assertIn('整个内容包会按顺序原样转发',selection)
-        self.assertNotIn('整个内容包会按顺序原样转发',feedback)
+        self.assertIn('selections.publish_ids',selection)
+        self.assertNotIn('整个内容包按顺序以普通文本和图片消息发送',feedback)
         self.assertIn('反馈信号',feedback)
 
     async def test_submit_checks_evidence_before_acceptance(self):

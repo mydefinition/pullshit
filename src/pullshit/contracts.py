@@ -99,10 +99,15 @@ class ContentBundle:
     expires_at: float
     media: list[MediaRef] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
+    trigger_refs: list[str] = field(default_factory=list)
+    origins: dict[str, str] = field(default_factory=dict)
+    publication: dict = field(default_factory=dict)
 
     @property
     def sources(self) -> list[MessageRef]:
-        return list(dict.fromkeys(message.ref for message in self.messages if not message.ref.message_id.startswith('embedded:')))
+        refs = [message.ref for message in self.messages if not message.ref.message_id.startswith('embedded:')]
+        refs.extend(MessageRef(*json.loads(key)) for key in dict.fromkeys(self.origins.values()))
+        return list(dict.fromkeys(refs))
 
     @classmethod
     def from_dict(cls, value: dict) -> ContentBundle:
@@ -120,6 +125,13 @@ class AgentTask:
     feedback: dict = field(default_factory=dict)
     limits: dict = field(default_factory=lambda: {'model_calls': 8, 'tool_calls': 8, 'output_tokens': 2048, 'input_characters': 64000})
 
+    target_group_ids: list[str] = field(default_factory=list)
+    selection: dict = field(default_factory=dict)
+
+    @property
+    def audience(self) -> set[str]:
+        return set(self.target_group_ids or [self.target_group_id])
+
     @classmethod
     def from_dict(cls, value: dict) -> AgentTask:
         return cls(**{**value, 'bundle': ContentBundle.from_dict(value['bundle']) if value.get('bundle') else None})
@@ -135,6 +147,9 @@ class AgentResult:
     usage: dict = field(default_factory=dict)
     inspected_images: list[str] = field(default_factory=list)
     direction: str | None = None
+    selections: list[dict] = field(default_factory=list)
+    snapshot_id: str = ''
+    snapshot_revision: int = 0
 
     @classmethod
     def from_dict(cls, value: dict) -> AgentResult:
@@ -151,6 +166,26 @@ class AgentResult:
             raise ValueError('invalid result')
         if result.direction not in {None, 'positive', 'negative', 'unknown'}:
             raise ValueError('invalid feedback direction')
+        if not isinstance(result.snapshot_id,str) or len(result.snapshot_id)>128:
+            raise ValueError('invalid snapshot')
+        if type(result.snapshot_revision) is not int or result.snapshot_revision<0:
+            raise ValueError('invalid snapshot revision')
+        if not isinstance(result.selections,list) or len(result.selections)>20:
+            raise ValueError('invalid selections')
+        for selection in result.selections:
+            if not isinstance(selection,dict) or set(selection)-{'publish_ids','context_status','completeness_reason','reason','score','tags','risks','new_value_reason'}:
+                raise ValueError('invalid selection')
+            ids=selection.get('publish_ids')
+            if not isinstance(ids,list) or not ids or len(ids)>1000 or any(not isinstance(v,str) or len(v)>32 for v in ids) or len(set(ids))!=len(ids):
+                raise ValueError('invalid publish ids')
+            if selection.get('context_status') not in {'complete','incomplete','uncertain'}:
+                raise ValueError('invalid context status')
+            for key in ('reason','completeness_reason'):
+                if not isinstance(selection.get(key),str) or not selection[key].strip() or len(selection[key])>4096:
+                    raise ValueError('missing selection reason')
+            if 'new_value_reason' in selection and (not isinstance(selection['new_value_reason'],str) or len(selection['new_value_reason'])>4096):
+                raise ValueError('invalid new value reason')
+            cls.from_dict({key:selection[key] for key in ('score','tags','risks','reason') if key in selection} | {'decision':'eligible'})
         return result
 
 class ChatGateway(Protocol):
@@ -158,6 +193,8 @@ class ChatGateway(Protocol):
     def events(self) -> AsyncIterator[ChatEvent]: ...
     async def fetch_message(self, ref: MessageRef) -> ChatMessage | None: ...
     async def fetch_forward(self, ref: MessageRef, forward_id: str) -> list[dict]: ...
+    async def reply(self, ref: MessageRef, text: str, *, before_send=None) -> str: ...
+    async def send_message(self, group_id: str, segments: list[dict], *, before_send=None) -> str: ...
     async def send_forward(self, group_id: str, nodes: list[dict], *, before_send=None) -> str: ...
 
 class AgentExecutor(Protocol):

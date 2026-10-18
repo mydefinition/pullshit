@@ -27,7 +27,7 @@ def gateway_settings(endpoint: str, timeout: float = 2.0) -> Settings:
                    'request_timeout_seconds': timeout, 'reconnect_initial_seconds': 1,
                    'reconnect_max_seconds': 30},
         'authorization': {'source_group_ids': ['900101', '900102'], 'target_group_ids': ['900201'],
-                          'operator_qq_ids': [], 'routes': []},
+                          'operator_qq_ids': []},
         'retention': {'message_days': 3},
     }
     return Settings(Path.cwd(), 'development', data)
@@ -356,6 +356,45 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, nodes)
         request = [item for item in self.napcat.received if item['action'] == 'get_forward_msg'][0]
         self.assertEqual(request['params'], {'message_id': 'fwd-1'})
+
+    async def test_reply_in_authorized_source_group_is_bound_to_message(self):
+        self.napcat.actions={'send_group_msg':lambda _request:{'status':'ok','retcode':0,'data':{'message_id':901}}}
+        await self.gateway.__aenter__()
+        receipt=await self.gateway.reply(MessageRef('900001','900101','321'),'收到')
+        self.assertEqual(receipt,'901')
+        request=[r for r in self.napcat.received if r['action']=='send_group_msg'][0]
+        self.assertEqual(request['params']['message'][0],{'type':'reply','data':{'id':'321'}})
+        with self.assertRaises(PlatformRejected):
+            await self.gateway.reply(MessageRef('900001','999999','321'),'收到')
+
+    async def test_send_message_uses_plain_group_api_and_preserves_segments(self):
+        self.napcat.actions = {'send_group_msg': lambda _request: {
+            'status': 'ok', 'retcode': 0, 'data': {'message_id': -555}}}
+        await self.gateway.__aenter__()
+        segments = [{'type':'text','data':{'text':'ordinary message'}},
+                    {'type':'image','data':{'file':'base64://YWJj'}}]
+        result = await self.gateway.send_message('900201', segments)
+        self.assertEqual(result, '-555')
+        requests = [r for r in self.napcat.received if r['action'].startswith('send_')]
+        self.assertEqual([r['action'] for r in requests], ['send_group_msg'])
+        self.assertEqual(requests[0]['params'], {'group_id':'900201','message':segments})
+
+    async def test_send_message_revalidates_account_and_callback(self):
+        await self.gateway.__aenter__()
+        def blocked():
+            raise PlatformRejected('paused')
+        with self.assertRaises(PlatformRejected):
+            await self.gateway.send_message('900201',[{'type':'text','data':{'text':'x'}}],before_send=blocked)
+        self.assertFalse(any(r['action']=='send_group_msg' for r in self.napcat.received))
+        with self.assertRaises(ValueError):
+            await self.gateway.send_message('900201',[{'type':'node','data':{}}])
+
+    async def test_send_message_missing_receipt_is_unknown(self):
+        self.napcat.actions = {'send_group_msg': lambda _request: {
+            'status':'ok','retcode':0,'data':{}}}
+        await self.gateway.__aenter__()
+        with self.assertRaises(OutcomeUnknown):
+            await self.gateway.send_message('900201',[{'type':'text','data':{'text':'x'}}])
 
     async def test_send_forward_ok(self):
         self.napcat.actions = {'send_group_forward_msg': lambda _request: {

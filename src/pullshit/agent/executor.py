@@ -28,6 +28,8 @@ from pathlib import Path
 import pullshit
 from pullshit.agent import protocol
 from pullshit.contracts import AgentResult, AgentTask, asdict, platform_id
+from pullshit.content import selection
+from pullshit.config import agent_config
 
 DEFAULT_WORKER_MODULE = 'pullshit.agent.hermes_worker'
 WORKER_DIR_PREFIX = 'task-'
@@ -138,6 +140,7 @@ class _Run:
     settled_total: float = 0.0
     inspected: list = field(default_factory=list)
     submitted: dict | None = None
+    image_descriptions: dict = field(default_factory=dict)
 
     def spend(self) -> float:
         return self.settled_total + sum(self.reservations.values())
@@ -172,6 +175,7 @@ class HermesExecutor:
         self._clock = clock
         self._semaphore = asyncio.Semaphore(int(settings.data['agent'].get('concurrency', 2)))
         self._runs: dict[str, _Run] = {}
+        self._decision_semaphore = asyncio.Semaphore(1)
 
     def clean_stale_workers(self, directory=None, now=None) -> int:
         directory = Path(directory or self._settings.path('storage', 'worker_directory'))
@@ -179,12 +183,26 @@ class HermesExecutor:
         return clean_stale_workers(directory, now=now, live=live)
 
     async def run(self, task: AgentTask) -> AgentResult:
+        if task.kind == 'selection' and agent_config(self._settings.data,task.kind)['api_format'] == 'systemone':
+            async with self._decision_semaphore:
+                return await self._run_task(task)
+        return await self._run_task(task)
+
+    async def _run_task(self, task: AgentTask) -> AgentResult:
         if task.task_id in self._runs:
             return _needs_review('task_already_running')
         problem = self._validate_task(task)
         if problem:
             return _needs_review(problem)
-        agent_cfg = self._settings.data['agent']
+        selection.prepare(task,self._store if hasattr(self._store,'unit_history') else None,self._settings.data.get('context'))
+        agent_cfg = agent_config(self._settings.data, task.kind)
+        if task.kind == 'feedback' and agent_cfg['api_format'] != 'llm':
+            return _needs_review('feedback_requires_llm')
+        task.limits = {'model_calls': agent_cfg.get('model_calls', 8),
+                       'tool_calls': agent_cfg.get('tool_calls', 8),
+                       'output_tokens': agent_cfg.get('max_output_tokens', 2048),
+                       'input_characters': agent_cfg.get('max_input_characters', 64000),
+                       **(task.limits or {})}
         if task.deadline <= self._clock():
             return _needs_review('deadline_expired')
         worker_directory = Path(self._settings.path('storage', 'worker_directory'))
@@ -243,9 +261,11 @@ class HermesExecutor:
 
     async def _spawn(self, taskdir: Path, agent_cfg: dict) -> asyncio.subprocess.Process:
         env = self._child_env(taskdir, agent_cfg)
-        python = agent_cfg.get('python') or sys.executable
+        decision = agent_cfg.get('api_format') == 'systemone'
+        python = sys.executable if decision else agent_cfg.get('python') or sys.executable
+        module = 'pullshit.agent.decision_worker' if decision else self._worker_module
         proc = await asyncio.create_subprocess_exec(
-            python, '-m', self._worker_module,
+            python, '-m', module,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, cwd=taskdir, env=env,
             start_new_session=True,
@@ -284,20 +304,23 @@ class HermesExecutor:
             return 'unsupported_kind'
         try:
             platform_id(task.target_group_id)
+            for group in task.audience: platform_id(group)
         except ValueError:
             return 'invalid_target_group'
-        if task.target_group_id not in self._settings.targets:
+        allowed_targets=self._settings.targets if task.kind=='selection' else self._settings.sources|self._settings.targets
+        if task.target_group_id not in allowed_targets or not task.audience <= allowed_targets:
             return 'target_not_authorized'
         bundle = task.bundle
         if bundle is None or not bundle.messages:
             return 'missing_bundle'
         for message in bundle.messages:
             source = message.ref.group_id
-            if source not in self._settings.sources:
+            allowed_sources=self._settings.sources if task.kind=='selection' else self._settings.sources|self._settings.targets
+            if source not in allowed_sources:
                 return 'source_not_authorized'
             permits = getattr(self._settings, 'permits', None)
-            if callable(permits) and not permits(source, task.target_group_id):
-                return 'route_not_permitted'
+            if task.kind=='selection' and (source in task.audience or (callable(permits) and any(not permits(source,target) for target in task.audience))):
+                return 'broadcast_not_permitted'
         return None
 
     async def _protocol_loop(self, run: _Run) -> AgentResult:
@@ -354,7 +377,7 @@ class HermesExecutor:
             await self._send(run.proc, {'type': 'tool_result', 'id': call_id, 'result': result})
 
     async def _invoke_tool(self, run: _Run, name: str, arguments: dict) -> dict:
-        agent_cfg = self._settings.data['agent']
+        agent_cfg = agent_config(self._settings.data, run.task.kind)
         timeout = min(float(agent_cfg.get('timeout_seconds', 90)), 30.0)
 
         async def call() -> dict:
@@ -372,6 +395,10 @@ class HermesExecutor:
                     return {'error': 'tool_bad_result'}
                 return result
             if name == 'get_context':
+                if run.task.selection:
+                    from pullshit.content.service import ContentService
+                    return await selection.expand(run.task,arguments,self._settings,self._store,
+                        ContentService(self._settings,self._store,clock=self._clock),self._clock())
                 return self._default_get_context(run.task, arguments)
             if name == 'get_group_preferences':
                 return self._default_get_group_preferences(run.task, arguments)
@@ -394,8 +421,13 @@ class HermesExecutor:
         known = self._known_evidence_ids(run.task)
         if any(entry not in known for entry in analysis['evidence_ids']):
             return {'accepted': False, 'errors': ['evidence_out_of_scope'], 'valid_evidence_ids': sorted(known)}
-        if analysis['decision'] == 'eligible' and analysis['score'] < self._settings.data['agent'].get('minimum_score', .75):
+        if analysis['decision'] == 'eligible' and analysis['score'] < agent_config(self._settings.data,run.task.kind).get('minimum_score', .75):
             return {'accepted': False, 'errors': ['score_below_minimum']}
+        if run.task.selection:
+            problem=selection.validate(run.task,AgentResult.from_dict(analysis),run.inspected)
+            if problem: return {'accepted':False,'errors':[problem]}
+        if any(item.get('score',analysis['score'])<self._settings.data['agent'].get('minimum_score',.75) for item in analysis['selections']):
+            return {'accepted':False,'errors':['selection_score_below_minimum']}
         run.submitted = analysis
         return {'accepted': True}
 
@@ -406,6 +438,8 @@ class HermesExecutor:
                  | {media.reference_id for media in bundle.media})
         if task.kind == 'feedback' and task.feedback.get('evidence_id'):
             known.add(task.feedback['evidence_id'])
+        if task.selection:
+            known.update(unit['id'] for unit in task.selection['units'])
         return known
 
     def _default_get_context(self, task: AgentTask, arguments: dict) -> dict:
@@ -419,14 +453,16 @@ class HermesExecutor:
 
     def _default_get_group_preferences(self, task: AgentTask, arguments: dict) -> dict:
         group = arguments.get('group_id')
-        if group != task.target_group_id:
+        if group not in task.audience:
             return {'error': 'denied_scope'}
-        return {'group_id': task.target_group_id, 'preferences': task.preferences or {}}
+        return {'group_id': group, 'preferences': task.preferences or {}}
 
     async def _inspect_image(self, run: _Run, arguments: dict, agent_cfg: dict) -> dict:
         media = self._resolve_media(run.task, arguments)
         if media is None:
             return {'error': 'denied_scope'}
+        if media.reference_id in run.image_descriptions:
+            return run.image_descriptions[media.reference_id]
         path = media.path
         if not path or not Path(path).is_file():
             return {'error': 'media_unavailable'}
@@ -468,9 +504,11 @@ class HermesExecutor:
                   + (tokens['output_tokens'] or 0) * prices['output_usd_per_million']) / 1e6
         self._settle(run, reservation, amount, complete)
         run.inspected.extend([media.reference_id, path])
-        return {'ok': True, 'description': description['description'],
+        result={'ok': True, 'description': description['description'],
                 'reference_id': media.reference_id, 'path': path,
                 'tokens': tokens, 'complete': complete}
+        run.image_descriptions[media.reference_id]=result
+        return result
 
     def _resolve_media(self, task: AgentTask, arguments: dict):
         if not isinstance(arguments, dict):
@@ -479,13 +517,15 @@ class HermesExecutor:
         if not wanted:
             return None
         for media in task.bundle.media:
+            if task.selection and media.reference_id not in {unit['media_id'] for unit in task.selection['units']}:
+                continue
             if wanted in (media.reference_id, media.path):
                 return media
         return None
 
     def _in_scope(self, task: AgentTask, arguments: dict) -> bool:
         bundle = task.bundle
-        groups = {task.target_group_id} | {m.ref.group_id for m in bundle.messages}
+        groups = task.audience | {m.ref.group_id for m in bundle.messages}
         message_ids = {m.ref.message_id for m in bundle.messages}
         if arguments.get('group_id') and arguments['group_id'] not in groups:
             return False
@@ -496,7 +536,7 @@ class HermesExecutor:
     async def _handle_budget_request(self, run: _Run, message: dict) -> None:
         request_id = str(message.get('id', ''))
         run.model_calls += 1
-        agent_cfg = self._settings.data['agent']
+        agent_cfg = agent_config(self._settings.data, run.task.kind)
         limits = run.task.limits or {}
         reason = ''
         if run.model_calls > int(limits.get('model_calls', run.model_calls)):
@@ -573,7 +613,7 @@ class HermesExecutor:
 
     def _validate_result(self, run: _Run, message: dict) -> AgentResult:
         task = run.task
-        agent_cfg = self._settings.data['agent']
+        agent_cfg = agent_config(self._settings.data, run.task.kind)
         raw = message.get('result')
         usage = raw.get('usage') if isinstance(raw, dict) and isinstance(raw.get('usage'), dict) else {}
         inspected = raw.get('inspected_images') if isinstance(raw, dict) else []
@@ -621,6 +661,11 @@ class HermesExecutor:
                 problems.append('score_below_minimum')
             if task.kind == 'feedback' and analysis['direction'] is None:
                 problems.append('missing_direction')
+            if any(item.get('score',analysis['score'])<float(agent_cfg.get('minimum_score',0)) for item in analysis['selections']):
+                problems.append('selection_score_below_minimum')
+        if task.selection:
+            problem=selection.validate(task,AgentResult.from_dict(analysis),run.inspected)
+            if problem: problems.append(problem)
         if self._clock() > task.deadline:
             problems.append('deadline_expired')
         if problems:
@@ -634,7 +679,8 @@ class HermesExecutor:
             decision=analysis['decision'], score=analysis['score'], tags=analysis['tags'],
             risks=analysis['risks'], evidence_ids=analysis['evidence_ids'],
             reason=analysis['reason'], usage=usage,
-            inspected_images=[str(v) for v in inspected], direction=analysis['direction'])
+            inspected_images=[str(v) for v in inspected], direction=analysis['direction'],
+            selections=analysis['selections'],snapshot_id=analysis['snapshot_id'],snapshot_revision=analysis['snapshot_revision'])
 
 
 async def _kill_group(proc: asyncio.subprocess.Process) -> None:

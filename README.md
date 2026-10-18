@@ -2,7 +2,7 @@
 
 > *聚是一坨 **shit**，散是漫天稀。*
 
-QQ 群内容策展机器人。将源群消息组装成内容包，交给 Hermes agent 选材，按目标群规则自动合并转发，从明确反馈中更新群口味。
+QQ 群内容策展机器人。将源群对话拆成带编号的文字、图片等内容单元，交给候选 agent 从上下文中选出零份或多份完整内容，按明确的编号清单广播到全部目标群，排除内容来源群，并从明确反馈中更新群口味。
 
 普通消息默认保留 3 天，正文、图片和具体反馈最多 7 天。程序自动清理内容、媒体和临时文件，并回收 SQLite 与 WAL 占用。
 
@@ -29,7 +29,7 @@ Hermes 固定使用上游提交 `7cc3fb8cb55898747dd1dfa56fda3e16ebba028e`，原
 
 ## 配置与运行
 
-复制 `config/local.example.json` 为 `config/local/development.json`，填写连接、群授权、路由、Hermes 解释器、模型、单价及每日费用预算。真实配置与密钥文件存于 Git 忽略目录。发送由 `sending.enabled` 控制。
+复制 `config/local.example.json` 为 `config/local/development.json`，填写连接、来源与目标群集合、Hermes 解释器、模型、单价及每日费用预算。候选通过 `agent.selection.api_format` 选择 `llm`（通用 LLM，经 Hermes）或 `systemone`（Jev 类决策接口）；反馈的 `agent.feedback.api_format` 固定为 `llm`。示例采用自托管 StartLux 候选和独立 LLM 反馈，分别注入 API key，具体字段见[配置说明](doc/configuration.md#候选与反馈的-api-通道)。真实配置与密钥文件存于 Git 忽略目录。发送由 `sending.enabled` 控制。
 
 ```bash
 .venv/bin/python -m pullshit check-config --profile development
@@ -42,7 +42,7 @@ set +a
 
 QQ 登录由 NapCat 管理。主程序认证后绑定账号，每环境只运行一个实例。`runtime.mode=auto` 执行自动发布，`shadow` 执行发现和判断。
 
-每个内容包单独合并转发，一批最多 100 个节点。默认每群间隔 10 分钟、每天最多 20 批和 500 个节点；每日下载及发布内容额度各 1 GiB。成功分片保留回执；回执丢失进入 `unknown`。
+每个观察窗口执行一次选材，agent 为每份候选给出发布编号与完整性理由；程序只发送选中内容。图片检查针对所选图片，上下文补查共用任务预算和历史处理记录。选中内容发送到目标集合 `T` 中除来源群 `s` 外的所有群，即 `T − {s}`；源群和目标群允许重叠。所选文本和图片按原时间及片段顺序发送，记录间文字换行，单条最多 100 个消息段，超限时分片。默认每群间隔 10 分钟、每天最多 20 条和 500 个消息段；每日下载及发布内容额度各 1 GiB。成功分片保留回执；回执丢失进入 `unknown`。
 
 ## 操作
 
@@ -56,7 +56,7 @@ QQ 登录由 NapCat 管理。主程序认证后绑定账号，每环境只运行
 
 `pause/resume` 默认控制整个环境，也可指定 `--account`、`--group`。核对确切目标消息后执行 `confirm DELIVERY_ID --message-id=12345 --profile development`。明确失败的分片可用 `retry DELIVERY_ID --profile development` 重试；重新判断候选使用 `reanalyze BUNDLE_ID --profile development`。
 
-源群引用消息发送 `/搬` 可提名；目标群引用发布发送 `/喜欢` 或 `/少来点` 提供反馈。管理员可使用 `/暂停`、`/恢复`、`/状态`。具体权限及返回行为见[接口文档](doc/interfaces.md)。
+源群引用消息发送 `/搬` 可提名。在任一授权群引用一条可读取的消息，直接说「我喜欢这个」「这类以后多发点」或「这种少来点」，agent 会理解喜好并引用回复确认；素材可以是群内原消息或 bot 已发布的内容。也可引用后使用 `/喜欢`、`/少来点`。近期有效反馈会作为后续选材的偏好例子；反馈本身不触发搬运。管理员可使用 `/暂停`、`/恢复`、`/状态`。具体权限及返回行为见[接口文档](doc/interfaces.md)。
 
 本机操作员可使用[模拟转发 HTTP 接口](doc/interfaces.md#模拟转发-http-接口)，指定 QQ 号和纯文本内容。卡片固定包含「模拟测试、非本人发言」说明；响应分别报告发送回执、请求 QQ 号和回读身份。接口使用独立 Bearer token、幂等请求键及已授权目标群。
 
@@ -81,5 +81,5 @@ QQ 登录由 NapCat 管理。主程序认证后绑定账号，每环境只运行
 
 通过 `--decisions PATH` 提供按内容指纹或内容包 ID 索引的 `AgentResult` JSON 对象；模拟文件中的 `*` 可提供统一判断。未提供判断的内容显示为需复核。回放将事件时间按相对间隔映射到运行时间，保留真实配置和真实发送的隔离边界。
 
-最后修改时间：2026-10-15T11:13:04Z
+最后修改时间：2026-10-17T18:18:45Z
 模型署名：GPT-6

@@ -185,8 +185,9 @@ def register(ctx) -> None:
     """标准 Hermes 插件入口：只注册 pullshit 工具集与预算中间件。"""
     ctx.register_tool(
         name='get_context', toolset=protocol.TOOLSET_NAME,
-        schema=_schema('get_context', '按消息或群范围获取素材内容包的上下文。group_id 与 message_id 必须是任务素材范围内的引用。',
-                       {'group_id': _STRING, 'message_id': _STRING, 'max_chars': {'type': 'integer'}}, []),
+        schema=_schema('get_context', '选材时以已有原子编号为锚点有限补充上下文：reply 获取引用，nearby 获取附近消息，history 获取处理摘要；填写缺失信息 reason。反馈任务可按原消息引用读取。',
+                       {'anchor_id':_STRING,'mode':{'type':'string','enum':['reply','nearby','history']},'reason':_STRING,
+                        'group_id': _STRING, 'message_id': _STRING, 'max_chars': {'type': 'integer'}}, []),
         handler=get_context)
     ctx.register_tool(
         name='inspect_image', toolset=protocol.TOOLSET_NAME,

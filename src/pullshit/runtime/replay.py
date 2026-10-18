@@ -11,9 +11,9 @@ from pullshit.publishing.service import Publisher,PublishRejected
 
 class ReplayGateway:
     def __init__(self,account_id): self.account_id=account_id; self.sent=[]
-    async def send_forward(self,group_id,nodes,*,before_send=None):
+    async def send_message(self,group_id,nodes,*,before_send=None):
         if before_send is not None: before_send()
-        self.sent.append({'group_id':group_id,'nodes':len(nodes)})
+        self.sent.append({'group_id':group_id,'segments':len(nodes)})
         return str(1000+len(self.sent))
     async def fetch_message(self,ref): return None
     async def fetch_forward(self,ref,forward_id): return []
@@ -23,7 +23,12 @@ class ReplayAgent:
     async def run(self,task):
         result=self.decisions.get(task.bundle.fingerprint,self.decisions.get(task.bundle.bundle_id,self.decisions.get('*')))
         if result is None: return AgentResult('needs_review',reason='no_simulated_verdict')
-        return AgentResult.from_dict(result)
+        value=dict(result)
+        value.setdefault('reason','explicit simulated verdict')
+        if task.kind=='selection':
+            value.setdefault('snapshot_id',task.selection['snapshot_id'])
+            value.setdefault('snapshot_revision',task.selection['revision'])
+        return AgentResult.from_dict(value)
     async def cancel(self,task_id): pass
 
 async def replay(root,fixture,database,account,sources,targets,decisions=None):
@@ -35,7 +40,7 @@ async def replay(root,fixture,database,account,sources,targets,decisions=None):
     safe=(root/'data/replay').resolve()
     if safe != root/'data/replay' or not database.resolve().is_relative_to(safe): raise ValueError('回放数据库必须位于 data/replay')
     data=read_json(root/'config/defaults.json')
-    data['authorization']={'source_group_ids':sources,'target_group_ids':targets,'operator_qq_ids':[],'routes':[{'source_group_id':s,'target_group_id':t} for s in sources for t in targets]}
+    data['authorization']={'source_group_ids':sources,'target_group_ids':targets,'operator_qq_ids':[]}
     data['sending']['enabled']=True; data['runtime']['mode']='auto'
     data['storage']={'database_path':str(database),'media_directory':str(database.parent/'media'),'worker_directory':str(database.parent/'workers')}
     settings=Settings(root,'replay',data,account); store=Store(database)
@@ -44,18 +49,19 @@ async def replay(root,fixture,database,account,sources,targets,decisions=None):
     publisher=Publisher(settings,store,gateway,clock=clock); feedback=FeedbackService(settings,store,clock=clock)
     content=ContentService(settings,store,gateway=None,media_cache=None,clock=clock)
     window=ContentWindow(**data['content']); counts={'accepted':0,'duplicates':0,'ignored':0}
+    from pullshit.runtime.service import Service
+    service=Service(root,'development',clock=clock)
+    service.effective=lambda:settings
+    service.settings=settings;service.store=store;service.gateway=gateway
+    service.agent=agent;service.publisher=publisher;service.feedback=feedback;service.content=content
     async def collect(refs):
+        refs=store.unassigned_refs(refs,now=current[0])
+        if not refs:return
         bundle=await content.build(refs)
-        if not bundle.messages: return
-        store.put_candidate(bundle)
-        analyses={}
-        for target in targets:
-            result=await agent.run(AgentTask(digest([bundle.bundle_id,target]),'selection',target,current[0]+90,bundle))
-            analyses[target]=asdict(result)
-        store.set_candidate_status(bundle.bundle_id,'analyzed',analysis=analyses)
-        for target in targets:
-            try: publisher.enqueue(bundle,target,AgentResult.from_dict(analyses[target]))
-            except PublishRejected: pass
+        if not bundle.messages:return
+        if not store.put_candidate(bundle):return
+        store.set_candidate_status(bundle.bundle_id,'collected')
+        await service.analyze(store.get_candidate(bundle.bundle_id,now=current[0]))
     baseline=None; anchor=current[0]
     try:
         store.recover_inflight()
@@ -79,7 +85,8 @@ async def replay(root,fixture,database,account,sources,targets,decisions=None):
                 elif event.kind=='recall':
                     store.recall_message(event.ref,now=current[0]); counts['accepted']+=1
                     for candidate in store.list_candidates(now=current[0]):
-                        if event.ref in candidate['bundle'].sources: store.cancel_candidate(candidate['bundle'].bundle_id,'source_recalled')
+                        if candidate['bundle'].publication and event.ref in candidate['bundle'].sources:
+                            store.cancel_candidate(candidate['bundle'].bundle_id,'source_recalled')
                 for refs in window.due(current[0]): await collect(refs)
                 await publisher.dispatch_once()
                 if event.ref.group_id in targets: await feedback.apply(event)

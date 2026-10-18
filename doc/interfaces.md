@@ -9,16 +9,16 @@
 | MessageRef | account_id、group_id、message_id；字符串 ID，消息 ID 可为负 |
 | ChatMessage | ref、user_id、nickname、occurred_at、segments、own、recalled、expires_at |
 | ChatEvent | kind=message/recall/reaction、ref、event_id、occurred_at、user_id 及对应消息／表情字段 |
-| ContentBundle | bundle_id、fingerprint、messages、media、issues、created_at、expires_at |
+| ContentBundle | bundle_id、fingerprint、messages、media、issues、trigger_refs、origins、publication、created_at、expires_at |
 | MediaRef | reference_id、source、path、sha256、size、mime、expires_at |
-| AgentTask | task_id、kind=selection/feedback、target_group_id、deadline、bundle、preferences、feedback、limits |
-| AgentResult | decision、score、tags、risks、evidence_ids、reason、usage、inspected_images、direction |
+| AgentTask | task_id、kind=selection/feedback、target_group_id、target_group_ids、deadline、bundle、preferences、feedback、limits、selection |
+| AgentResult | decision、score、tags、risks、evidence_ids、reason、usage、inspected_images、direction、selections、snapshot_id、snapshot_revision |
 
-`AgentResult.decision` 为 eligible/rejected/needs_review，score 范围 0–1；direction 为 positive/negative/unknown。evidence_ids 支持消息 ID、完整 MessageRef.key 和媒体 reference_id；反馈任务还可引用本次反馈的 evidence_id。来源与图片证据必须属于当前任务。字段结构由 `contracts.py` 定义，worker 输出语义由 `agent/protocol.py` 统一校验。
+`AgentResult.decision` 为 eligible/rejected/needs_review，score 范围 0–1；direction 为 positive/negative/unknown。evidence_ids 支持本任务 U 编号、消息 ID、完整 MessageRef.key 和媒体 reference_id；反馈任务还可引用本次反馈的 evidence_id。来源与图片证据必须属于当前任务。字段结构由 `contracts.py` 定义，worker 输出语义由 `agent/protocol.py` 统一校验。
 
-`eligible` 要求 `risks` 为空。选材任务的 `risks` 表示阻止整个内容包原样发布的实际问题。普通提醒和质量取舍写入 `reason`；群口味为空时按通用娱乐目标判断。提交工具和最终响应校验均拒绝 `eligible` 与非空 `risks` 的组合，模型收到错误码 `eligible_with_blocking_risks` 后可以修正判断。需要剔除消息或图片才能发布的内容包使用 `needs_review`，原记录顺序由发布器完整保留。
+`eligible` 要求 `risks` 为空。选材结果携带匹配当前任务的 snapshot_id 与 snapshot_revision，selections 为最多 20 份独立选择，每份含 publish_ids、context_status、completeness_reason、reason，可覆盖 score、tags、risks。结合历史单元时还须填写 new_value_reason，解释新增材料的实质贡献。每份必须 context_status=complete、无阻断风险、达到分数阈值，并包含本轮新增单元。发布编号必须存在、可发布且跨项无重复；所选图片必须完成 inspect_image。零份选择使用 rejected 或 needs_review。证据编号与实际发布编号分别校验。普通质量取舍写入 reason；群口味为空时按通用娱乐目标判断。提交工具与最终响应共用校验。
 
-平台引用使用十进制 ID；展开的嵌入节点使用 `embedded:` 内部引用。`ContentBundle.sources` 只包含可验证的外层平台引用，内部引用绑定外层账号与群。
+平台引用使用十进制 ID；展开的嵌入节点使用 `embedded:` 内部引用。`ContentBundle.sources` 只包含可验证的外层平台引用，内部引用绑定外层账号与群。选材任务的 `target_group_ids` 携带全部广播目标，`target_group_id` 为其中一个上下文目标；空列表使用该单目标。引用反馈任务使用具体 `target_group_id`。每份内容只选材一次，结论供全部广播目标使用；群偏好影响综合选材和待发优先级。
 
 ## Python 模块
 
@@ -27,13 +27,19 @@
 | ChatGateway.events() | 异步迭代归一化事件 |
 | fetch_message(ref) | 返回核对过身份的 ChatMessage 或缺失结果 |
 | fetch_forward(ref, forward_id) | 返回转发节点，权限由外层消息限定 |
-| send_forward(group_id, nodes, before_send=None) | 复查登录账号后执行同步检查回调，再发送 1–100 个节点并返回消息 ID |
+| reply(ref, text, before_send=None) | 绑定真实事件账号与授权群，复查账号及回调，以普通引用消息回复 |
+| send_message(group_id, segments, before_send=None) | 复查登录账号后执行同步检查回调，使用普通群消息发送文本／图片，返回消息 ID |
+| send_forward(group_id, nodes, before_send=None) | 操作员模拟接口使用，复查登录账号后执行同步检查回调，再发送 1–100 个节点并返回消息 ID |
 | ContentService.build(refs) | 返回内容包；保留缺失和截断原因 |
-| ContentWindow.add(message) / due(now, force=False) | 按作者和群收集并返回到期消息引用 |
-| HermesExecutor.run(task) / cancel(task_id) | 执行受限 agent 任务／取消进程组 |
-| Publisher.enqueue(bundle, target, analysis) | 检查发布资格，建立分片任务，返回 delivery_id 列表 |
+| ContentWindow.add(message) / due(now, force=False) | 按账号与群收集对话并返回到期消息引用 |
+| content.selection.prepare / view / validate / publications | 分配原子编号、生成模型视图、校验选择、组装独立发布内容 |
+| get_context(anchor_id, mode, reason) | 以现有编号读取 reply、nearby 或 history；任务共享次数、单元、字符与图片预算 |
+| HermesExecutor.run(task) / cancel(task_id) | 按任务连接配置执行 Hermes LLM 或候选 SystemOne worker／取消进程组 |
+| Publisher.enqueue(bundle, target, analysis) | 校验带 publication 清单的独立发布内容及广播范围、去重，建立目标群分片任务，返回 delivery_id 列表 |
 | Publisher.dispatch_once() | 执行一个可发送分片，或返回无可执行任务 |
-| FeedbackService.apply(event) | 归因并保存有效信号，或返回无归因结果 |
+| FeedbackService.capture(event) | 将引用反馈意图同步写入 feedback，返回幂等记录 |
+| FeedbackService.apply(event) | 解释已发布内容或群内原消息的引用反馈，持久保存态度与标签 |
+| FeedbackService.pending_events(account) / examples(account, group) | 恢复待解释事件／提供每群最多 6 条近期正负反馈例子 |
 | FeedbackService.learn(account, group) / rollback(account, group) | 更新群偏好／恢复上一快照 |
 | Maintenance.clean(compact=False) | 删除过期内容，返回数量、字节和回收结果 |
 
@@ -44,14 +50,14 @@
 `Store` 按消息、候选、发送、反馈、群状态和预算提供读写。时间使用 Unix 秒浮点数；日预算使用 UTC 的 YYYY-MM-DD。查询使用 now 参数过滤过期数据。
 
 - 消息：put_message/get_message/recall_message/nearby，身份包含账号和群。撤回先到时保留短期墓碑。
-- 候选：put_candidate/get_candidate/list_candidates/set_candidate_status，内容 ID 不允许被其他正文覆盖。
+- 候选：put_candidate/get_candidate/list_candidates/set_candidate_status，内容 ID 不允许被其他正文覆盖。unassigned_refs 查询尚未分配的新增消息；unit_history 提供最多 3 条已持久化判断摘要；seen_publication 按目标查询已处理的内容组件。
 - 发送：enqueue_deliveries 在一个事务中建立全部分片；get_delivery/deliveries/claim_delivery/finish_delivery 管理执行。幂等身份为账号、目标群、内容指纹、分片编号。
 - 恢复：recover_inflight 将 sending 置为 unknown；confirm_delivery 确认 unknown；retry_delivery 仅重试明确 failed。
-- 反馈：put_feedback/feedback_since，表情增删按稳定身份更新有效性。
+- 反馈：put_feedback/get_feedback/feedback_since，表情增删按稳定身份更新有效性；pending_feedback 查询 payload.processing=pending 的有界恢复列表，complete_feedback 保存解释结果并保持原始期限上限。
 - 控制：group_state/set_group_state/paused/set_paused。CLI 通配范围支持环境、账号及目标群控制。
 - 预算：reserve_budget(day, scope, metric, amount, limit) 返回布尔值；settle_budget(day, scope, metric, reserved, actual) 结算预留金额。budget/budget_summary 返回汇总。预算检查、状态领取和发送额度预留在事务中完成。
 
-发送队列状态为 queued/sending/sent/failed/unknown/cancelled。批次在全部分片建立后可执行；前片未成功时，后片保持排队。unknown 保留人工核对入口。成功回执可以在正文清除后作为精简索引保留。
+发送队列状态为 queued/sending/sent/failed/unknown/cancelled。批次在全部分片建立后可执行；前片未成功时，后片保持排队。unknown 保留人工核对入口。成功回执可以在正文清除后作为精简索引保留。每个目标群独立保留普通消息回执，引用任意已发分片均可关联到相同内容包。存储字段 `nodes` 保存普通消息段，`node_count` 及日额度指标 `nodes` 计量消息段数。
 
 ## Hermes worker 协议
 
@@ -61,9 +67,19 @@
 
 完整素材与指令超过输入字符上限时，任务返回 needs_review。文本和视觉用量分别按对应配置单价计算，汇总到统一日预算；流式响应通过 Hermes 的 post_api_request usage hook 结算。
 
-父进程工具协议返回对象，Hermes 插件处理器返回编码后的 JSON 字符串。submit_analysis 在确认 accepted 前检查结果结构、证据范围和 eligible 分数。get_context 的 max_chars 小于完整内容时返回 context_character_limit。
+父进程工具协议返回对象，Hermes 插件处理器返回编码后的 JSON 字符串。submit_analysis 在确认 accepted 前检查结果结构、证据范围和 eligible 分数。选材 get_context 要求已有 anchor_id、mode=reply/nearby/history 与缺失信息 reason；新增内容返回保持稳定的局部编号及快照版本。相邻上下文读取本地消息，引用回取由内容服务执行。扩展参数见配置说明，预算不足返回明确错误并保持原编号；重复取得的单元不重复返回正文。反馈任务保持其绑定原消息的读取语义。
+
+发布器要求 publication.version=1 的明确清单，复查清单内容指纹与已持久化分片载荷的一致性；观察包只供判断，独立发布候选只含选中的原始文字和图片。
 
 日志只保留诊断字段，正文和工具载荷不进入应用日志。最终 AgentResult 同时满足 schema 和业务证据校验才进入发布判断。
+
+## SystemOne 候选 worker
+
+候选的 `api_format=systemone` 使用与 Hermes 相同的任务、预算、工具和结果协议，主程序 Python 执行 `pullshit.agent.decision_worker`。反馈仅使用 `api_format=llm`。角色配置与继承见[配置说明](configuration.md#候选与反馈的-api-通道)。
+
+HTTP 载荷为 `{model, state, questions}`；`state` 含原子编号、原消息与发送者关系、本轮新增标记、历史判断、群偏好和反馈例子。候选分组为每个可发布编号提出 Choice，选项为同组核心编号、discard 或 needs_context。分组问题只判断语义归属；低置信度单元及指向它的组合暂缓，其他独立组合继续处理。可发布组必须包含本轮新增单元；各组再独立回答完整性、跨群价值和新增贡献三个 Noul。通过的组合保留原编号，概率写入 score 和判断依据；程序构造的说明记录类型化判定及数值。补取上下文保持父进程的稳定编号与 snapshot_revision。
+
+决策请求先取得任务／日预算预留，再按 input_tokens／output_tokens 结算。自托管 free 模式记录零费用请求；视觉 LLM 费用照常计量。缺失或非法 usage 保留预留并进入复核，never 模式的 output_tokens=0 是有效值。HTTP 失败、答案缺失、低置信度或 none 告警产生 needs_review。完整发布清单仍由执行器及发布器复查，原始观察和最终发布内容分别保存。
 
 ## CLI
 
@@ -143,11 +159,16 @@ curl --fail-with-body -sS http://127.0.0.1:18700/v1/simulation-forwards \
 ## 群命令与权限
 
 - `/搬`：在授权源群顶层消息中引用一条消息，进入候选流程。
-- `/喜欢`、`/少来点`：在目标群引用确切发布消息，提供群口味反馈。
+- 引用自然反馈：在授权源群或目标群引用一条可读取消息，说「我喜欢这个」「这种少发点」等自然表达；agent 识别喜好，普通聊天保持未知。
+- `/喜欢`、`/少来点`：在授权群引用消息，明确表达正面／负面反馈。
 - `/暂停`、`/恢复`：配置的管理员在目标群发送顶层命令，控制本群；在仅作为来源的群发送命令，控制该账号全部目标群。
-- `/状态`：配置的管理员请求当前群暂停状态与排队分片数。授权目标群在 auto 模式且发送开启时返回合并转发回复；回复每群每分钟最多 5 次，群发布暂停期间仍可回复。
+- `/状态`：配置的管理员请求当前群暂停状态与排队分片数。授权目标群在 auto 模式且发送开启时返回普通文本回复；回复每群每分钟最多 5 次，群发布暂停期间仍可回复。
+
+有效正负反馈通过普通引用消息回复确认；每群每分钟最多 5 次，受 auto 模式及发送开关控制，发布暂停期间可确认。反馈意图在模型解释前落库，取消和重启后恢复；重复事件复用同一记录。未经可靠解释的反馈保持未知，反馈本身不进入发布队列。
+
+选材任务的 `feedback.recent_examples` 提供目标及来源群的近期反馈例子。引用原话仅为偏好证据；群权限、发布规则和费用预算继续由程序校验。未发布素材的 `publication_id` 使用内容指纹，以同一内容身份合并信号。
 
 引用正文、合并转发节点、OCR 和模型输入中的命令保持为素材。管理员命令通过真实事件的发送者校验；普通成员可以提供偏好反馈，硬规则由管理员配置。
 
-最后修改时间：2026-10-15T11:13:04Z
+最后修改时间：2026-10-18T06:17:10Z
 模型署名：GPT-6

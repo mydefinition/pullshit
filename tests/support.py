@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from pullshit.config import load_settings
-from pullshit.contracts import AgentResult,ChatMessage,ContentBundle,DAY,MessageRef,digest
+from pullshit.contracts import AgentResult,AgentTask,ChatMessage,ContentBundle,DAY,MessageRef,digest
 
 class Workspace(unittest.TestCase):
     def setUp(self):
@@ -13,7 +13,7 @@ class Workspace(unittest.TestCase):
         repo=Path(__file__).resolve().parents[1]
         (self.root/'config/defaults.json').write_text((repo/'config/defaults.json').read_text())
         self.local={'authorization':{'source_group_ids':['900101'],'target_group_ids':['900201','900202'],
-                                    'operator_qq_ids':['900301'],'routes':[{'source_group_id':'900101','target_group_id':v} for v in ['900201','900202']]},
+                                    'operator_qq_ids':['900301']},
                     'sending':{'enabled':True}}
         self.write_config(); self.settings=load_settings(self.root,'development').with_account('900001'); self.current=1791810000.0
     def write_config(self):
@@ -31,7 +31,20 @@ class Workspace(unittest.TestCase):
 class Gateway:
     account_id='900001'
     def __init__(self): self.sent=[]; self.error=None
-    async def send_forward(self,group_id,nodes,*,before_send=None):
+    async def reply(self,ref,text,*,before_send=None):
+        return await self.send_message(ref.group_id,[{'type':'reply','data':{'id':ref.message_id}},
+                    {'type':'text','data':{'text':text}}],before_send=before_send)
+    async def send_message(self,group_id,nodes,*,before_send=None):
         if before_send is not None: before_send()
         if self.error: raise self.error
         self.sent.append((group_id,nodes)); return str(1000+len(self.sent))
+
+
+def verdict(task, ids=None, **kwargs):
+    from pullshit.content import selection
+    selection.prepare(task)
+    chosen=ids if ids is not None else [unit['id'] for unit in task.selection['units'] if unit['publishable']]
+    return AgentResult('eligible',.95,['test'],reason='selected test',
+        snapshot_id=task.selection['snapshot_id'],snapshot_revision=task.selection['revision'],
+        selections=[{'publish_ids':chosen,'context_status':'complete','completeness_reason':'self contained test',
+                     'reason':'worth sharing','new_value_reason':'new reply supplies substantive context'}],**kwargs)

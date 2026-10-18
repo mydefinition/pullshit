@@ -12,6 +12,18 @@ from pullshit.contracts import platform_id
 class ConfigError(ValueError):
     pass
 
+def agent_config(data, kind):
+    """Resolve one task's connector while sharing execution and expense limits."""
+    base=data['agent']
+    result={key:copy.deepcopy(value) for key,value in base.items() if key not in {'selection','feedback'}}
+    role=base.get(kind,{})
+    for key,value in role.items():
+        if key in {'api_format','free'} or value:
+            result[key]=value
+    result.setdefault('api_format','llm')
+    result.setdefault('free',False)
+    return result
+
 def merge(base, overlay):
     result=copy.deepcopy(base)
     for key,value in overlay.items():
@@ -55,21 +67,28 @@ class Settings:
     def targets(self): return set(self.data['authorization']['target_group_ids'])
     @property
     def operators(self): return set(self.data['authorization']['operator_qq_ids'])
-    @property
-    def routes(self): return {(r['source_group_id'],r['target_group_id']) for r in self.data['authorization']['routes']}
     def with_account(self,account_id): return Settings(self.root,self.profile,self.data,platform_id(account_id))
     def path(self,section,key): return self.root / self.data[section][key]
     def token(self): return os.environ.get(self.data['napcat']['access_token_env'],'')
-    def permits(self,source,target): return (source,target) in self.routes
+    def permits(self,source,target): return source in self.sources and target in self.targets and source != target
+    def broadcast_targets(self,bundle):
+        return self.targets - {ref.group_id for ref in bundle.sources}
     def validate_live(self):
         nc=self.data['napcat']; agent=self.data['agent']
-        if not self.sources or not self.targets or not self.routes: raise ConfigError('自动运行需要配置来源、目标和路由')
+        if not self.sources or not self.targets: raise ConfigError('自动运行需要配置来源和目标')
         parsed=urlsplit(nc['endpoint'])
         if parsed.scheme not in {'ws','wss'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ConfigError('NapCat 地址无效')
         if not self.token(): raise ConfigError('缺少 NapCat token 环境变量')
-        if not agent['model'] or not agent['provider'] or not agent['base_url'] or not os.environ.get(agent['api_key_env']):
-            raise ConfigError('缺少 Hermes 模型连接配置')
+        for kind in ('selection','feedback'):
+            connector=agent_config(self.data,kind)
+            if not connector['model'] or not connector['base_url'] or not os.environ.get(connector['api_key_env']):
+                raise ConfigError(f'缺少 {kind} 模型连接配置')
+            parsed=urlsplit(connector['base_url'])
+            if parsed.scheme not in {'http','https'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ConfigError(f'{kind} 模型地址无效')
+            if connector['api_format']=='llm' and not connector['provider']:
+                raise ConfigError(f'缺少 {kind} provider')
         if agent['daily_budget_usd'] <= 0 or agent['task_budget_usd'] <= 0:
             raise ConfigError('必须显式配置模型预算')
         if agent['input_usd_per_million']<=0 or agent['output_usd_per_million']<=0:
@@ -91,10 +110,6 @@ def load_settings(root: Path,profile: str) -> Settings:
             for item in ids: platform_id(item)
         except ValueError as exc: raise ConfigError('无效授权 ID') from exc
     settings=Settings(root,profile,value)
-    routes=value['authorization']['routes']
-    if any(not isinstance(r,dict) or set(r) != {'source_group_id','target_group_id'} or r['source_group_id'] not in settings.sources or r['target_group_id'] not in settings.targets for r in routes):
-        raise ConfigError('路由范围无效')
-    if len(settings.routes) != len(routes): raise ConfigError('重复路由')
     if value['runtime']['mode'] not in {'auto','shadow'}: raise ConfigError('运行模式必须为 auto 或 shadow')
     for section in ('runtime','napcat','content','context','media','limits','retention'):
         for key,item in value[section].items():
@@ -104,9 +119,21 @@ def load_settings(root: Path,profile: str) -> Settings:
     for key in ('daily_budget_usd','task_budget_usd','input_usd_per_million','output_usd_per_million','vision_input_usd_per_million','vision_output_usd_per_million'):
         if not math.isfinite(value['agent'][key]) or value['agent'][key] < 0: raise ConfigError('模型预算与单价不能为负')
     if not 0 <= value['agent']['minimum_score'] <= 1: raise ConfigError('选材分数范围无效')
+    for kind in ('selection','feedback'):
+        role=value['agent'].get(kind,{})
+        if role.get('api_format','llm') not in ({'llm','systemone'} if kind=='selection' else {'llm'}):
+            raise ConfigError(f'{kind} API 格式无效；反馈仅支持 llm')
+        if role.get('free') and (kind!='selection' or role.get('api_format')!='systemone'):
+            raise ConfigError('free 仅用于自托管 selection systemone')
+        for key in ('timeout_seconds','max_input_characters'):
+            if role.get(key,0)<0: raise ConfigError(f'{kind}.{key} 不能为负')
+    decision=value['agent'].get('decision',{})
+    if decision.get('think_mode','') not in {'','never','auto','always'}: raise ConfigError('决策思考模式无效')
+    if not 1<=decision.get('max_units',16)<=24 or not 1<=decision.get('think_budget',512)<=4096:
+        raise ConfigError('决策单元或思考预算范围无效')
     if value['retention']['message_days'] > 7 or value['retention']['content_days'] > 7 or value['retention']['log_days'] > 7:
         raise ConfigError('内容和日志保留期限最多 7 天')
-    if value['limits']['max_forward_nodes'] > 100: raise ConfigError('单次合并转发最多 100 个节点')
+    if value['limits']['max_message_segments'] > 100: raise ConfigError('单条普通消息最多 100 个消息段')
     if value['preferences']['max_step'] > .05 or value['preferences']['max_step'] <= 0:
         raise ConfigError('偏好调整步长必须在 (0,0.05]')
     for section,fields in {'storage':['database_path','media_directory','worker_directory'],'logging':['directory']}.items():

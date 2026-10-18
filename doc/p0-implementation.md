@@ -106,5 +106,83 @@ Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/
 - [NapCat Docker](https://github.com/NapNeko/NapCat-Docker)：官方容器部署和持久化目录。
 - [websockets asyncio 客户端](https://websockets.readthedocs.io/en/stable/reference/asyncio/client.html)：客户端调用、超时与缓冲限制。
 
-最后修改时间：2026-10-12T18:39:19Z
+## 2026-10-17 普通消息广播验证
+
+选材任务携带全部广播目标，按目标群等权汇总偏好，每份内容生成一次判断。来源集合与目标集合分别配置；同一内容发送到目标集合中除全部已知来源群外的目标。发布器使用 `send_group_msg` 发送普通文本与图片，原记录文字以换行连接，按 100 个消息段及媒体字节上限分片，每目标独立保留配额、状态和回执。
+
+源码完整 169 项测试通过，耗时 64.933 秒。隔离构建的 wheel 经独立目标目录安装后执行相同完整 169 项测试，耗时 65.954 秒；实际导入路径指向该安装目录，31 个 Python 模块与源码逐字节一致。验证覆盖选材仅调用一次、源目标重叠排除、每个目标的完整收件、普通文本／图片数组、发送边界检查、目标移除独立取消、99/100/101/200/201 消息段顺序与分片、图片内容校验及 base64 发送、暂停／间隔／日额度、确切引用反馈与 unknown 防重发。真实 Hermes SDK 使用本机模拟模型验证工具调用和结果提交。
+
+2026-10-17T08:02:41Z 安装生产 wheel，SHA-256 为 `913f5b2f0464b20dadf3414b90f4cb32fa600c6035b89e0c42b641bf77d78098`。生产配置与依赖检查通过，业务、隧道及模拟接口均为 RUNNING；QQ 认证、预期账号和全部目标群检查通过。3 个来源可用，配置包含 4 个源群及 1 个目标群。切换前待发投递为 0，保留 6 条 sent 与 2 条 unknown。本次没有额外向 QQ 群发送测试消息，也没有调用真实模型；完整实际群发送行为的验收任务统一见[开发 TODO](phase-1-todo.md)。发行、安装测试、部署与健康证据保存在 Git 忽略的 `local/ops/pullshit/`。
+
+## 2026-10-17 群内自然引用反馈验证
+
+授权源群和目标群可引用可读取的消息自然表达喜好，范围包含 bot 已发布内容及群内原素材。反馈请求同步保存为 pending，模型解释后更新正负态度、题材标签及素材摘要。周期调度恢复待解释事件，重复事件复用既有记录。反馈素材作为独立内容包保存，反馈处理独立于发布队列；后续选材读取目标群及来源群的近期有效反馈例子。正负反馈使用绑定用户事件的普通引用消息确认，每群每分钟最多 5 次。
+
+最终 wheel 的完整 177 项测试通过，耗时 64.341 秒；31 个 Python 模块与最终源码逐字节一致。新增验证覆盖未发布原素材、源群及目标群作用域、普通聊天不计偏好、自然正负态度、重复事件不重复调用、处理中断后恢复、数据库重开查询 pending、反馈确认及后续选材获取近期例子。Hermes 固定 SDK 与本机模拟模型的集成检查包含在完整套件中。
+
+使用真实 DeepSeek 官方 Flash、独立临时 SQLite 和合成文字执行两项预检：我喜欢这个并希望多分享同类笑话，结果 positive，11.345 秒；不喜欢此类笑话并要求少发，结果 negative，20.416 秒。两次 usage 均为 complete，按项目峰值单价合计估算 0.0144198 USD。预检不连接 QQ、不发送群消息，未修改生产反馈或候选。
+
+2026-10-17T10:01:08Z 生产安装通过配置及依赖检查，业务、隧道和模拟接口均为 RUNNING；QQ 账号匹配、6 个来源与 2 个目标均可用。wheel SHA-256 为 `ccf8cab1cae9bc6aa69c7d20dec3887cdcec4dd333bd85f3353d8daa2d0ea912`。发行、语义预检及部署证据分别为 Git 忽略目录中的 `local/ops/pullshit/run/natural-feedback-release.json`、`natural-feedback-preflight.json`、`natural-feedback-deployment.json`。真实群内输入到确认回读的验收任务统一见[开发 TODO](phase-1-todo.md)。
+
+## 2026-10-17 原子选材与有界上下文验证
+
+隔离 wheel 的完整 195 项测试通过，耗时 62.675 秒；32 个 Python 模块与部署源码逐字节一致。回归用例将两张截图、表情和提及放在同一观察包，明确选中两张截图后，发送载荷仅含对应图片；同条 QQ 消息的文字、图片及提及可独立编号，提及供理解。验证同时覆盖零份／多份选择、编号越界、旧快照、版本变化、跨项重复、不完整输出、新增贡献、所选图片检查、队列载荷篡改、历史分配持久化、图像核心去重、嵌入节点外层来源及未选上下文撤回。
+
+上下文检查覆盖以已有编号获取引用、追加编号与版本、历史材料标记、累计调用和字符额度、重复读取及图片下载次数。扩展仅包含历史材料时，发布校验返回 historical_content_only；结合新增回复时要求新增贡献说明。物理可读性由程序校验，语义完整性由 agent 的逐份理由表达。
+
+真实 DeepSeek 官方 Flash 使用隔离合成素材验证：混合文字／图片／提及／闲聊任务耗时 17.664 秒，仅选中 U001 笑话正文，score=0.85；普通聊天耗时 11.373 秒，返回 rejected、空选择。混合素材中的 1×1 测试图片请求返回 vision_http_failed，对应任务保留不确定费用预留，文字仍独立成篇。单独使用 128×128 RGB 合成图片执行相同 inspect_image 路径，耗时 6.38 秒，识别纯红色，返回完整用量。预检使用独立 SQLite，不连接 QQ，不建立真实发送。
+
+2026-10-17T12:19:14.650055Z 安装生产 wheel，SHA-256 为 `e452f9cdb55228fc8bcd205922598ff54403fe78cacf0fa8babf4debacb08c34`。生产配置、依赖及 32 个模块核验通过，业务、隧道、模拟接口均为 RUNNING，6 个源群与 2 个目标群健康检查通过。生产发布额度为每群间隔 60 秒、每日 100 条及 500 个消息段。切换时无 queued 投递，保留 16 条 sent 与 2 条 unknown。三份证据为 Git 忽略目录下的 `local/ops/pullshit/run/atomic-selection-release.json`、`atomic-selection-preflight.json`、`atomic-selection-deployment.json`；自然群聊验收任务见[开发 TODO](phase-1-todo.md)。
+
+## 2026-10-17 候选 SystemOne 与反馈 LLM 通道验证
+
+候选 worker 按角色配置选择通用 LLM 或 SystemOne，反馈配置和执行入口限定通用 LLM。SystemOne 的 Choice 单元分组和完整性／传播价值／实质新增三个 Noul 产生原编号发布清单，仍接受统一快照、所选图片和发布资格校验。自托管候选按显式 free 配置记录零 API 费用，视觉描述与反馈保持 LLM 计费；未知 usage 和失败结果进入复核。
+
+本机 HTTP 服务经真实子进程验证多份独立选择、分段组合、闲聊排除、缺失答案／usage、非法概率、空 Choice、none 告警、401／422／429／502、输入／调用／费用限制、回复上下文追加、图片证据、单并发、排队过期和取消清理。反馈配置为独立 LLM 时没有访问决策端点。新增 11 项测试，隔离安装后的完整 206 项测试通过（93.338 秒），33 个 Python 模块与源码逐字节一致；pip check 和开发配置检查通过。
+
+真实 DeepSeek 反馈预检使用合成段子及「这个冷笑话我很喜欢，以后多发点」，候选连接已配置为 systemone。15.943 秒返回 eligible、positive、score=0.92，提取冷笑话／幽默／自嘲／健身标签；4 次模型调用、4 次工具调用，usage 完整，估算费用 0.0058857 USD。预检使用临时 SQLite，没有连接 QQ 或访问笔记本模型；生产发送和自启保持关闭。
+
+发行 SHA-256：`8e35a1bca7f31930dd660321818f67670cf39eb37df7984d74b5b634c6c2aa40`。发行记录、暂存配置和真实反馈证据分别位于 Git 忽略的 `local/ops/pullshit/run/systemone-release.json`、`local/ops/pullshit/run/systemone-staged-production.json`、`local/probes/decision-models/real-feedback-preflight.json`。真实 StartLux 验收与安装切换任务统一见[开发 TODO](phase-1-todo.md)。
+
+## 2026-10-18T06:05:39Z 自托管 StartLux 网络与认证边界验证
+
+从项目机器访问 `https://gosleep.top/startlux/health` 返回 HTTP 200，响应模型为 `startlux-decision-9b-autothink-q4km`、kind=auto_think；通过已有固定主机密钥 SSH 通道检查 HK 宿主机，`127.0.0.1:18090` 正在监听，loopback health 返回相同模型和 HTTP 200。公网 `/v1/systemone` 的无凭据合成请求返回 HTTP 401，错误明确要求 Bearer key；此请求没有通过认证。
+
+项目进程环境、既有私有生产环境文件及约定的 `config/local/startlux.env` 路径均未提供专用 key，因此本次没有认证模型推理或候选输出结果。33 个源码模块与此前通过完整测试的发行包一致；生产发送为 false，自启标记缺失。检查未连接 QQ、未修改生产配置或业务库。原始结果保存在 Git 忽略的 `local/probes/decision-models/connectivity-20261018.json`，认证联调任务统一见[开发 TODO](phase-1-todo.md)。
+
+## 2026-10-18 StartLux 9B 认证联调与停用状态安装
+
+专用 key 通过指定私有环境变量保存，权限 600；认证后的 health 和 models 均返回 200。接口报告 AutoThink 9B Q4_K_M、llama.cpp、4096 token、纯文本、默认 think_mode=never。预检保持单并发、0.75 门槛与 4000 字符前置限制。
+
+初次混合样本的 Choice 将独立段子在自身归组与丢弃间给出接近概率，触发整轮复核。适配修正为独立语义分组，再进行传播价值判断；分组不确定只暂缓对应单元及依赖组合。真实原始响应与分步诊断保存在 Git 忽略目录；没有降低既有阈值。新增回归验证一个不确定组合不会阻止其他独立内容通过，最终发行包完整 207 项测试通过（98.470 秒），33 个模块与源码逐字节一致。
+
+最终发行包真实预检结果：
+
+| 合成样本 | 结果 | 耗时 |
+| --- | --- | --- |
+| 单独程序员段子 | needs_review，无选择 | 5.905 秒 |
+| AI 与手机依赖段子 | needs_review，无选择 | 4.554 秒 |
+| 分两条发送的面试对话段子 | needs_review，无选择 | 4.729 秒 |
+| 两份独立段子的同一观察 | eligible，仅 U001 程序员段子 | 5.382 秒 |
+| 集合约饭通知 | needs_review，无选择 | 3.037 秒 |
+| 128×128 合成纯红图片 | DeepSeek 视觉检查完成，needs_review，无选择 | 12.119 秒 |
+| 超长输入 | 请求前 decision_input_character_limit，模型调用 0 | 1.623 秒 |
+
+六组内容样本只有一组产生候选，各组选择校验均通过，实际发布内容组装仅含所选 U001。相同程序员段子单独出现与伴随其他段子时结果不同，说明结果受观察上下文影响；这些样本验证连接与执行语义，不能据此声称选材质量改善。初轮纯红图为 rejected，最终轮为 needs_review，两轮均没有选择图片；视觉检查按独立 LLM 费用结算，最终轮 0.0014373 USD，usage 完整。自托管决策请求记录零 API 费用，输出 token 为 0。
+
+2026-10-18T06:15:52.512063Z 将最终 wheel、角色配置与模型凭据安装到既有生产环境。生产 ready 配置、依赖及 33 个模块哈希验证通过；候选为 systemone／startlux-decision-9b-autothink-q4km，反馈为 llm／deepseek-flash。发送开关为 false，自启标记缺失；没有连接 QQ、启动业务进程或发送消息。安装前快照与旧 wheel 可用于恢复。发行 SHA-256 为 `c6dad895539103bf4c4949442cb972317e8a2255726eaa7711b6221956a9d25f`。
+
+发行、真实样本和安装证据分别为 Git 忽略的 `local/ops/pullshit/run/systemone-release.json`、`local/probes/decision-models/extended-real-results.json`、`local/ops/pullshit/run/systemone-stopped-installation.json`。质量校准及恢复运行任务统一见[开发 TODO](phase-1-todo.md)。
+
+## 2026-10-18T07:00:24.572454Z SystemOne 生产启动验证
+
+按用户明确部署要求恢复自动运行。启动前验证 StartLux 认证 health 为 HTTP 200、生产 ready 配置通过，读取投递状态为 22 条 sent、2 条 unknown，queued 与 sending 均为 0，持久暂停为空。保留私有配置备份后启用现有部署守护，待 QQ 账号与全部授权群检查通过，再通过原子配置替换开启 sending.enabled；runtime.mode=auto。
+
+业务、QQ SSH 隧道与模拟接口三个托管进程均为 RUNNING；确认业务 PID 正在执行安装包的 `python -m pullshit ... run`。健康检查显示预期账号匹配、6 个来源全部可用、2 个目标全部可用、10 个来源排除后的广播组合可用；本机模拟接口 health=ready，既有两个 crontab 守护入口保持配置。候选使用 systemone／startlux-decision-9b-autothink-q4km，反馈使用 llm／deepseek-flash。发行包为此前通过 207 项测试的版本，SHA-256 `c6dad895539103bf4c4949442cb972317e8a2255726eaa7711b6221956a9d25f`。
+
+启动后读取到 9 条自然消息，未向 QQ 额外发送测试消息；历史 unknown 投递保持原有核对入口。每目标群 60 秒间隔、每日 100 条消息／500 段及模型预算保持私有配置原值，选材门槛保持 0.75。守护标记启用；主机实际重启、自托管笔记本长期可用性及自然选材质量验收统一见[开发 TODO](phase-1-todo.md)。
+
+启动前核对、配置备份和部署结果保存在 Git 忽略的 `local/ops/pullshit/run/systemone-startup-precheck.json`、`local/ops/pullshit/run/systemone-deployment.json`。本次操作仅修改私有运行配置和启用标记，验证采用配置、模型健康、进程、QQ 认证／群列表和已有自然消息记录。
+
+最后修改时间：2026-10-18T07:00:24Z
 模型署名：GPT-6

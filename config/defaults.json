@@ -13,8 +13,7 @@
   "authorization": {
     "source_group_ids": [],
     "target_group_ids": [],
-    "operator_qq_ids": [],
-    "routes": []
+    "operator_qq_ids": []
   },
   "sending": {
     "enabled": false
@@ -34,7 +33,12 @@
     "forward_depth": 3,
     "max_nodes": 1000,
     "max_fetch_calls": 5,
-    "timeout_seconds": 20
+    "timeout_seconds": 20,
+    "expansion_calls": 2,
+    "expansion_units": 40,
+    "expansion_characters": 16000,
+    "expansion_images": 4,
+    "nearby_seconds": 600
   },
   "media": {
     "max_image_bytes": 10485760,
@@ -63,16 +67,41 @@
     "task_budget_usd": 0.0,
     "input_usd_per_million": 0.0,
     "output_usd_per_million": 0.0,
-    "minimum_score": 0.75
+    "minimum_score": 0.75,
+    "selection": {
+      "api_format": "llm",
+      "provider": "",
+      "model": "",
+      "base_url": "",
+      "api_key_env": "",
+      "free": false,
+      "timeout_seconds": 0,
+      "max_input_characters": 0
+    },
+    "feedback": {
+      "api_format": "llm",
+      "provider": "",
+      "model": "",
+      "base_url": "",
+      "api_key_env": "",
+      "free": false,
+      "timeout_seconds": 0,
+      "max_input_characters": 0
+    },
+    "decision": {
+      "max_units": 16,
+      "think_mode": "",
+      "think_budget": 512
+    }
   },
   "limits": {
     "min_interval_seconds": 600,
     "daily_batches": 20,
-    "daily_nodes": 500,
-    "max_forward_nodes": 100,
     "max_batch_media_bytes": 20971520,
     "daily_download_bytes": 1073741824,
-    "daily_publish_bytes": 1073741824
+    "daily_publish_bytes": 1073741824,
+    "max_message_segments": 100,
+    "daily_segments": 500
   },
   "retention": {
     "message_days": 3,

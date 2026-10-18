@@ -167,6 +167,43 @@ class NapCatGateway:
             raise PayloadMismatch('forward payload mismatch')
         return data['messages']
 
+    async def reply(self, ref: MessageRef, text: str, *, before_send=None) -> str:
+        """Reply to a real event within an authorized group."""
+        if ref.account_id!=self.account_id or ref.group_id not in self.settings.sources|self.settings.targets:
+            raise PlatformRejected('reply not authorized')
+        await self._verify_account()
+        if before_send is not None: before_send()
+        data=await self._call('send_group_msg',{'group_id':ref.group_id,'message':[
+            {'type':'reply','data':{'id':platform_id(ref.message_id,True)}},
+            {'type':'text','data':{'text':str(text)}}]})
+        if not isinstance(data,dict) or data.get('message_id') is None:
+            raise OutcomeUnknown('invalid reply ack')
+        try: return platform_id(str(data['message_id']),True)
+        except ValueError: raise OutcomeUnknown('invalid reply ack') from None
+
+    async def send_message(self, group_id: str, segments: list[dict], *, before_send=None) -> str:
+        """Send an ordinary text/image message and return its platform receipt."""
+        if not self.account_id:
+            raise OutcomeUnknown('gateway not ready')
+        group_id = platform_id(str(group_id))
+        if not isinstance(segments, list) or not 1 <= len(segments) <= 100:
+            raise ValueError('message segment count must be 1..100')
+        if any(not isinstance(segment, dict) or segment.get('type') not in {'text', 'image'}
+               or not isinstance(segment.get('data'), dict) for segment in segments):
+            raise ValueError('message requires text/image segments')
+        if group_id not in self.settings.targets:
+            raise PlatformRejected('target not authorized')
+        await self._verify_account()
+        if before_send is not None:
+            before_send()
+        data = await self._call('send_group_msg', {'group_id': group_id, 'message': segments})
+        if not isinstance(data, dict) or data.get('message_id') is None:
+            raise OutcomeUnknown('invalid send ack')
+        try:
+            return platform_id(str(data['message_id']), signed=True)
+        except ValueError:
+            raise OutcomeUnknown('invalid send ack') from None
+
     async def send_forward(self, group_id: str, nodes: list[dict], *, before_send=None) -> str:
         """Send 1..100 forward nodes and return the new message id."""
         if not self.account_id:

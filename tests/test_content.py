@@ -53,10 +53,10 @@ class ContentTests(Workspace):
         service=ContentService(self.settings,store,clock=lambda:self.current); service.max_nodes=2
         limited=asyncio.run(service.build(message.ref))
         self.assertEqual(len(limited.messages),2); self.assertIn('node_limit',limited.issues)
-    def test_quiet_window_is_independent_per_author(self):
+    def test_quiet_window_collects_the_group_conversation(self):
         window=ContentWindow(60,300,500); messages=self.bundle(3).messages
         messages[1].user_id='900402'; messages[1].occurred_at=self.current+55
         messages[2].user_id='900402'; messages[2].occurred_at=self.current+100
         for message in messages: window.add(message)
-        self.assertEqual(window.due(self.current+101),[[messages[0].ref]])
-        self.assertEqual(window.due(self.current+160),[[messages[1].ref,messages[2].ref]])
+        self.assertEqual(window.due(self.current+101),[])
+        self.assertEqual(window.due(self.current+160),[[m.ref for m in messages]])

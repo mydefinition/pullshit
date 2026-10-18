@@ -14,7 +14,7 @@ from pathlib import Path
 from pullshit.contracts import DAY, ChatMessage, ContentBundle, MediaRef, MessageRef
 from pullshit.storage.store import Store, StoreError
 
-LIMITS = {'min_interval_seconds': 0, 'daily_batches': 100, 'daily_nodes': 1000,
+LIMITS = {'min_interval_seconds': 0, 'daily_batches': 100, 'daily_segments': 1000,
           'daily_publish_bytes': 10 ** 9}
 
 
@@ -371,7 +371,7 @@ class StoreTestCase(unittest.TestCase):
         self.assertEqual(batches, {'2026-06-30': 1.0, '2026-07-01': 1.0})
 
     def test_claim_daily_limits(self):
-        limits = {'min_interval_seconds': 0, 'daily_batches': 1, 'daily_nodes': 100,
+        limits = {'min_interval_seconds': 0, 'daily_batches': 1, 'daily_segments': 100,
                   'daily_publish_bytes': 10 ** 9}
         self.store.enqueue_delivery(delivery(delivery_id='d1', fingerprint='fa'))
         self.store.enqueue_delivery(delivery(delivery_id='d2', fingerprint='fb'))
@@ -382,7 +382,7 @@ class StoreTestCase(unittest.TestCase):
         self.assertIsNotNone(self.store.claim_delivery('d3', limits, now=1002.0))
         day = utc_day(1000.0)
         self.assertEqual(self.store.budget(day, '100:200', 'batches'), {'used': 1.0, 'reserved': 0.0})
-        node_limits = dict(LIMITS, daily_nodes=3)
+        node_limits = dict(LIMITS, daily_segments=3)
         self.store.enqueue_delivery(delivery(delivery_id='d4', group='300', fingerprint='fd', node_count=5))
         self.assertIsNone(self.store.claim_delivery('d4', node_limits, now=1000.0))
         self.assertEqual(self.store.budget(day, '100:300', 'nodes'), {'used': 0.0, 'reserved': 0.0})

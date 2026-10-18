@@ -7,11 +7,11 @@
 `profile` 为 `development` 或 `production`。数据库、媒体、worker 和日志位于各自环境目录；路径解析检查目录与符号链接隔离。真实配置和环境变量文件保持 `600` 权限。
 
 - `napcat.endpoint`：正向联合 WebSocket 根地址，协议为 ws/wss。凭据使用 `napcat.access_token_env` 指定的环境变量。
-- `authorization`：源群、目标群、操作者 ID 及有向路由，ID 使用十进制字符串。
+- `authorization`：`source_group_ids`、`target_group_ids`、`operator_qq_ids` 分别定义来源集合、广播目标集合及操作者；ID 使用十进制字符串。来自源群的选中内容发送到全部目标群，排除其来源群。
 - `runtime.mode`：`auto` 自动发布，`shadow` 仅发现和分析。
 - `sending.enabled`：发布开关。持久暂停独立生效。
 
-配置示例见 [local.example.json](../config/local.example.json)。主程序从认证连接获取 QQ 账号，授权变化在处理和发送边界重新检查。
+配置示例见 [local.example.json](../config/local.example.json)。主程序从认证连接获取 QQ 账号，来源与目标集合允许重叠，广播收件范围在处理和发送边界重新检查。
 
 ## 本机模拟接口
 
@@ -36,7 +36,52 @@ uv sync --project local/hermes-runtime --python 3.14 --locked --no-dev
 
 `daily_budget_usd` 和 `task_budget_usd` 是显式费用上限；`input_usd_per_million`、`output_usd_per_million` 填写文本模型单价；`vision_input_usd_per_million`、`vision_output_usd_per_million` 填写视觉模型单价。配置视觉模型时同时校验连接、密钥与独立单价。供应商 usage 缺失时占用预留额度。首版只启用项目工具，发布凭据由主程序持有。
 
-默认并发 2、时限 90 秒、模型与工具调用各最多 8 次。输出 token 和输入字符上限共同限制任务。错误修正属于同一任务额度。素材和指令超过输入上限时返回需复核。模型、内容窗口和保留期配置在服务启动时加载；群授权、路由、发送模式、开关与持久暂停在处理或发布边界复查。
+默认并发 2、时限 90 秒、模型与工具调用各最多 8 次。输出 token 和输入字符上限共同限制任务。错误修正属于同一任务额度。素材和指令超过输入上限时返回需复核。模型、内容窗口和保留期配置在服务启动时加载；群授权、发送模式、开关、发送额度与持久暂停在处理或发布边界复查。
+
+## 候选与反馈的 API 通道
+
+`agent` 顶层提供共享执行限制、预算、视觉 LLM 及通用 LLM 连接。`agent.selection` 与 `agent.feedback` 按任务覆盖连接；空字符串和数值 0 继承顶层值。角色字段如下：
+
+| 字段 | 行为 |
+| --- | --- |
+| api_format | selection 允许 `llm`／`systemone`；feedback 固定 `llm`，配置及执行入口均校验 |
+| provider / model / base_url / api_key_env | 独立连接；llm 经 Hermes 使用 provider，systemone 使用类型化 HTTP 请求 |
+| timeout_seconds / max_input_characters | 覆盖任务时限及输入字符上限；决策输入按每题实际渲染所需的共享 state 与单题问题计算字符上限 |
+| free | 显式设为 true 的自托管 selection systemone 按零 API 费用计量，仍记录 token 与调用数；视觉 LLM 和反馈按独立价格结算 |
+
+`agent.decision.max_units` 限制整个观察快照的原子单元数（默认 16，范围 1–24），超限进入复核。`think_mode` 为空时只发送通用 SystemOne 字段，兼容 Jev；StartLux 可设 `never`／`auto`／`always`，启用思考时发送 `think_budget`（默认 512）。选材及完整性概率沿用 `agent.minimum_score` 门槛；这些概率需通过项目样本评估，不能当成业务准确率。
+
+自托管纯文本 StartLux 示例：
+
+```json
+{
+  "agent": {
+    "selection": {
+      "api_format": "systemone",
+      "model": "startlux-decision-9b-autothink-q4km",
+      "base_url": "https://gosleep.top/startlux",
+      "api_key_env": "PULLSHIT_STARTLUX_API_KEY",
+      "free": true,
+      "timeout_seconds": 120,
+      "max_input_characters": 4000
+    },
+    "feedback": {"api_format": "llm"},
+    "decision": {"max_units": 16, "think_mode": "never", "think_budget": 512}
+  }
+}
+```
+
+HK 宿主机可使用 `http://127.0.0.1:18090`；其他机器使用 HTTPS 入口，具体地址与密钥保存在本机私有配置。base_url 可带代理前缀，或直接填写 `/v1/systemone`／`/v1/decisions` 完整地址；以 `/v1` 结尾时追加 `/systemone`。API key 通过指定环境变量注入。
+
+SystemOne 候选在同一执行器内保持单并发，使用主程序 Python 的独立子进程。它先通过 Choice 按语义关系将可发布原子单元分组，再以 Noul 分别判断独立完整性、跨群传播价值与实质新增贡献，构造零份或多份发布清单。需要上下文时通过项目工具补取并使用更新后的快照；超出输入、调用或上下文限制时进入复核。HTTP 401／422／429／502、缺失答案或 usage、非法概率和 choice=null 进入复核。分组中的低置信度与 none_probability 告警只暂缓对应单元及依赖它的组合，其他独立组合继续接受三个 Noul 校验；各阶段共用既有门槛，不自动切换模型或重试请求。
+
+纯文本决策模型通过现有 `vision_*` 通用 LLM 读取图片描述，并向父进程登记检查证据；视觉请求继续使用其独立密钥、单价及共享任务预算。文档中的 4096 token 服务上限由后端最终校验；字符上限用于前置限制，程序保留完整素材，超限返回复核。模型技术依据见[Agent 接入调研](reserach/agent-integration.md)，真实联调与任务状态见[开发 TODO](phase-1-todo.md)。
+
+## DeepSeek 官方 API
+
+核对日期：2026-10-17。[官方接口说明](https://api-docs.deepseek.com/)提供 OpenAI 兼容的 Chat Completions；配置 `provider=custom`、`model=deepseek-flash`、`base_url=https://api.deepseek.com`，密钥由 `PULLSHIT_AGENT_API_KEY` 注入。官方模型名 `deepseek-flash` 对应 DeepSeek V4.1 Flash，支持工具调用和[图片理解](https://api-docs.deepseek.com/guides/vision/)；视觉配置使用相同模型、入口和密钥环境变量。
+
+按[官方价格表](https://api-docs.deepseek.com/quick_start/pricing/)的峰值价格，将文本和视觉的每百万输入／输出 token 单价均配置为 0.30 / 1.20 USD；缓存命中和非高峰折扣仍按配置价保守估算。每日与单任务预算分别独立配置。部署切换时先验证认证、真实文本和图片任务，再替换私有配置并重启业务进程；验证结果与具体设备记录保存在 `local/`，开发及联调状态见[开发 TODO](phase-1-todo.md)。
 
 ## OpenCode Go 与 DeepSeek V4.1 Flash
 
@@ -55,19 +100,26 @@ worker 标识为 `pullshit/0.2`；固定 Hermes 版本发送主模型会话头�
 | content.quiet_seconds / max_wait_seconds | 60 / 300 秒 |
 | context.reply_depth / forward_depth | 3 / 3 |
 | context.max_nodes / max_fetch_calls / timeout_seconds | 1000 / 5 / 20 秒 |
-| limits.max_forward_nodes | 100，配置上限 100 |
+| context.expansion_calls / expansion_units | 每选材任务累计 2 次 / 40 个原子单元 |
+| context.expansion_characters / expansion_images | 每选材任务累计 16000 字符 / 4 张图片 |
+| context.nearby_seconds | 相邻上下文前后各 600 秒；明确引用受期限及总预算约束 |
+| limits.max_message_segments | 100，应用配置上限 100 |
 | limits.min_interval_seconds | 每目标群 600 秒 |
-| limits.daily_batches / daily_nodes | 每账号／目标群 20 批 / 500 节点 |
+| limits.daily_batches / daily_segments | 每账号／目标群 20 条普通消息 / 500 个消息段 |
 | limits.daily_download_bytes / daily_publish_bytes | 全局各 1 GiB |
 | media.max_image_bytes / limits.max_batch_media_bytes | 10 / 20 MiB |
 | media.cache_max_bytes | 2 GiB |
 | retention.message_days / content_days / log_days | 3 / 7 / 7 天，内容上限 7 天 |
 | retention.delivery_days / budget_days | 90 / 30 天 |
-| preferences.min_publications / min_members / max_step | 3 / 3 / 0.05 |
+| preferences.min_publications / min_members / max_step | 至少 3 份不同内容 / 3 名成员 / 单次步长 0.05 |
 
-日额度按 UTC 日期分桶。发送尝试占用批数、节点及发布额度；失败或回执不确定同样占用。每片合并转发都受间隔限制。
+窗口按账号与群收集连续对话，消息片段编号用于选择实际发布内容。上下文扩展通过 get_context 的 anchor_id、mode 与 reason 定位，已有单元复用编号；补充文本按字符计量，模型请求仍受输入字符上限与费用预算限制。
+
+自然语言引用反馈在来源及目标授权范围内受理。确认回复每群每分钟最多 5 次，受 auto 模式和发送开关控制；持久发布暂停独立于反馈受理及确认。近期正负反馈每群最多 6 例提供给选材任务，权重汇总继续遵守表中的最少内容数及成员数。
+
+日额度按 UTC 日期分桶。普通消息发送尝试占用消息条数、消息段数及发布额度；失败或回执不确定同样占用。每个广播目标独立计算间隔和日条数／段数额度，分片逐条执行；下载和发布字节使用全局额度。
 
 新库使用 `state.sqlite3`。程序只打开新 schema。具体设备的启动服务、路径、凭据和运维脚本存放在 Git 忽略的 `local/`。
 
-最后修改时间：2026-10-15T11:13:04Z
+最后修改时间：2026-10-18T06:17:10Z
 模型署名：GPT-6

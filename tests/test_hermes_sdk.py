@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from unittest.mock import patch
 from pullshit.agent.executor import HermesExecutor
 from pullshit.contracts import AgentTask
-from tests.support import Workspace
+from tests.support import Workspace,verdict
 
 SDK_PYTHON=Path(os.environ.get('PULLSHIT_HERMES_PYTHON',str(Path(__file__).resolve().parents[1]/'local/hermes-runtime/.venv/bin/python')))
 
@@ -35,14 +35,14 @@ class HermesSdkTests(Workspace):
                     if owner.image:
                         delta['tool_calls'][0]['function']={'name':'inspect_image','arguments':json.dumps({'reference_id':owner.image_ref.reference_id})}
                     else:
-                        verdict={'decision':'eligible','score':.95,'tags':['test'],'evidence_ids':['1'],'reason':'mock provider verified'}
-                        if conflicting: verdict['risks']=['Whole bundle must be edited']
+                        result_verdict=asdict(verdict(owner.task)); result_verdict['evidence_ids']=['1']
+                        if conflicting: result_verdict['risks']=['Whole bundle must be edited']
                         delta['tool_calls'].extend([
-                            {'index':1,'id':'context-call','type':'function','function':{'name':'get_context','arguments':'{}'}},
-                            {'index':2,'id':'analysis-call','type':'function','function':{'name':'submit_analysis','arguments':json.dumps({'analysis':verdict})}}
+                            {'index':1,'id':'context-call','type':'function','function':{'name':'get_context','arguments':json.dumps({'anchor_id':'U001','mode':'history','reason':'check previous review'})}},
+                            {'index':2,'id':'analysis-call','type':'function','function':{'name':'submit_analysis','arguments':json.dumps({'analysis':result_verdict})}}
                         ])
                 else:
-                    delta={'role':'assistant','content':json.dumps({'decision':'eligible','score':.95,'tags':['test'],'risks':[],'evidence_ids':['1'],'reason':'mock provider verified'})}; finish='stop'
+                    delta={'role':'assistant','content':json.dumps(asdict(verdict(owner.task)))}; finish='stop'
                 chunk={'id':'mock','object':'chat.completion.chunk','created':int(time.time()),'model':'mock-model','choices':[{'index':0,'delta':delta,'finish_reason':finish}]}
                 usage={**chunk,'choices':[],'usage':{'prompt_tokens':40,'completion_tokens':60,'total_tokens':100}}
                 raw=('data: '+json.dumps(chunk)+'\n\ndata: '+json.dumps(usage)+'\n\ndata: [DONE]\n\n').encode()
@@ -59,6 +59,7 @@ class HermesSdkTests(Workspace):
             bundle.messages[0].segments.append({'type':'image','data':{'file':self.image_ref.path}})
             self.settings.data['agent'].update(vision_model='mock-vision',vision_base_url=f'http://127.0.0.1:{server.server_port}/v1',vision_input_usd_per_million=3.0,vision_output_usd_per_million=4.0)
         task=AgentTask('sdk-integration','selection','900201',time.time()+20,bundle)
+        self.task=task
         return task
     def test_real_sdk_tools_streaming_usage_and_cleanup(self):
         task=self.configure()
@@ -72,7 +73,7 @@ class HermesSdkTests(Workspace):
         tool_messages=[v for v in self.requests[1]['messages'] if v['role']=='tool']
         results={message['tool_call_id']:json.loads(message['content']) for message in tool_messages}
         self.assertEqual(results['test-call']['preferences'],{})
-        self.assertEqual(results['context-call']['bundle']['messages'][0]['ref']['message_id'],'1')
+        self.assertEqual(results['context-call']['history'],[])
         self.assertTrue(results['analysis-call']['accepted'])
         self.assertTrue(all('error' not in value for value in results.values()))
         day=time.strftime('%Y-%m-%d',time.gmtime()); budget=self.store_instance.budget(day,'global','model_usd')

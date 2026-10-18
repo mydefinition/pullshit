@@ -2,51 +2,111 @@
 from __future__ import annotations
 from datetime import datetime,timezone
 import time
-from pullshit.contracts import AgentTask, DAY, MessageRef, digest
+from pullshit.config import agent_config
+from pullshit.contracts import AgentTask, ChatEvent, ChatMessage, DAY, MessageRef, digest
 
 class FeedbackService:
-    def __init__(self,settings,store,agent=None,*,clock=time.time):
+    def __init__(self,settings,store,agent=None,*,content=None,clock=time.time):
         self.settings,self.store,self.agent,self.clock=settings,store,agent,clock
+        self.content=content
 
-    def _signal(self,event,delivery,kind,direction,payload,active=True):
+    def _signal(self,event,subject,kind,direction,payload,active=True):
         return {'signal_id':digest([event.ref.account_id,event.ref.group_id,event.ref.message_id,event.user_id,kind,payload.get('reaction')]),
-                'account_id':event.ref.account_id,'group_id':event.ref.group_id,'bundle_id':delivery['bundle_id'],
-                'publication_id':delivery['fingerprint'],'user_id':event.user_id,'kind':kind,'direction':direction,
-                'tags':delivery.get('tags',[]),'occurred_at':event.occurred_at,'expires_at':min(event.occurred_at+self.settings.data['retention']['content_days']*DAY,delivery['expires_at']),
+                'account_id':event.ref.account_id,'group_id':event.ref.group_id,'bundle_id':subject.get('bundle_id'),
+                'publication_id':subject.get('fingerprint'),'user_id':event.user_id,'kind':kind,'direction':direction,
+                'tags':subject.get('tags',[]),'occurred_at':event.occurred_at,
+                'expires_at':min(event.occurred_at+self.settings.data['retention']['content_days']*DAY,subject.get('expires_at',float('inf'))),
                 'payload':payload,'active':active}
 
-    async def apply(self,event):
-        if event.ref.group_id not in self.settings.targets or event.occurred_at+7*DAY<=self.clock() or event.user_id==event.ref.account_id:
+    def capture(self,event):
+        """Persist a quoted feedback request before asynchronous interpretation."""
+        if (event.kind!='message' or not event.message or event.user_id==event.ref.account_id
+                or event.ref.group_id not in self.settings.sources|self.settings.targets
+                or event.occurred_at+self.settings.data['retention']['content_days']*DAY<=self.clock()):
             return None
+        replies=[s.get('data',{}).get('id') for s in event.message.segments if s.get('type')=='reply']
+        text=''.join(str(s.get('data',{}).get('text','')) for s in event.message.segments if s.get('type')=='text').strip()
+        if len(replies)!=1 or not text or (text.startswith('/') and text not in {'/喜欢','/少来点'}): return None
+        try: target=MessageRef.from_dict({'account_id':event.ref.account_id,'group_id':event.ref.group_id,'message_id':replies[0]})
+        except (ValueError,TypeError): return None
+        kind='explicit' if text in {'/喜欢','/少来点'} else 'reply'
+        signal=self._signal(event,{},kind,'unknown',{'text':text,'target_message_id':target.message_id,
+                            'feedback_message_id':event.ref.message_id,'event_id':event.event_id,'processing':'pending'})
+        self.store.put_feedback(signal)
+        return self.store.get_feedback(signal['signal_id'],now=self.clock())
+
+    def pending_events(self,account_id,limit=200):
+        rows=self.store.pending_feedback(account_id,self.settings.sources|self.settings.targets,now=self.clock(),limit=limit)
+        events=[]
+        for row in rows:
+            payload=row['payload'];ref=MessageRef(account_id,row['group_id'],payload['feedback_message_id'])
+            message=ChatMessage(ref,row['user_id'],'',row['occurred_at'],[
+                {'type':'reply','data':{'id':payload['target_message_id']}},
+                {'type':'text','data':{'text':payload['text']}}],expires_at=row['expires_at'])
+            events.append(ChatEvent('message',ref,row['occurred_at'],payload['event_id'],row['user_id'],message))
+        return events
+
+    async def apply(self,event):
+        if (event.ref.group_id not in self.settings.sources|self.settings.targets
+                or event.occurred_at+7*DAY<=self.clock() or event.user_id==event.ref.account_id): return None
         if event.kind=='reaction':
             delivery=self.store.delivery_for_message(event.ref)
             if not delivery or delivery['expires_at']<=self.clock(): return None
             signal=self._signal(event,delivery,'reaction','unknown',{'reaction':event.reaction},active=bool(event.added))
-            # The platform's target-message identity is stable for reaction add/remove.
             signal['signal_id']=digest([event.ref.key,event.user_id,event.reaction,'reaction'])
             self.store.put_feedback(signal); return signal
-        if event.kind!='message' or not event.message: return None
-        segments=event.message.segments
-        replies=[s.get('data',{}).get('id') for s in segments if s.get('type')=='reply']
-        if len(replies)!=1: return None
-        target=MessageRef(event.ref.account_id,event.ref.group_id,str(replies[0]))
+        signal=self.capture(event)
+        if signal is None or signal['payload'].get('processing')!='pending': return None
+        payload=dict(signal['payload']);target=MessageRef(event.ref.account_id,event.ref.group_id,payload['target_message_id'])
         delivery=self.store.delivery_for_message(target)
-        if not delivery or delivery['expires_at']<=self.clock(): return None
-        text=''.join(str(s.get('data',{}).get('text','')) for s in segments if s.get('type')=='text').strip()
-        direction={'/喜欢':'positive','/少来点':'negative'}.get(text)
-        kind='explicit'
-        if direction is None:
-            if text.startswith('/') or not text or self.agent is None: return None
-            kind='reply'; candidate=self.store.get_candidate(delivery['bundle_id'],now=self.clock())
-            if candidate is None: return None
-            task=AgentTask(digest(['feedback',event.event_id]),'feedback',event.ref.group_id,
-                           self.clock()+self.settings.data['agent']['timeout_seconds'],bundle=candidate['bundle'],
-                           preferences=self.store.group_state(event.ref.account_id,event.ref.group_id)['preferences'],
-                           feedback={'text':text,'target_message_id':target.message_id,'evidence_id':event.ref.key})
-            result=await self.agent.run(task)
-            direction=(result.direction or 'unknown') if result.decision=='eligible' and not result.risks else 'unknown'
-        signal=self._signal(event,delivery,kind,direction,{'text':text,'target_message_id':target.message_id})
-        self.store.put_feedback(signal); return signal
+        candidate=self.store.get_candidate(delivery['bundle_id'],now=self.clock()) if delivery else None
+        bundle=candidate['bundle'] if candidate else None
+        if bundle is None:
+            from pullshit.content.service import ContentService
+            content=self.content or ContentService(self.settings,self.store,clock=self.clock)
+            bundle=await content.build(target)
+            if target not in bundle.sources or bundle.expires_at<=self.clock() or any(m.recalled for m in bundle.messages):
+                payload.update(processing='done',recognized=False,reason='quoted_message_unavailable')
+                self.store.complete_feedback(signal['signal_id'],payload=payload,now=self.clock())
+                return None
+            self.store.put_candidate(bundle)
+        subject=delivery or {'bundle_id':bundle.bundle_id,'fingerprint':bundle.fingerprint,'expires_at':bundle.expires_at,'tags':[]}
+        tags=list(subject.get('tags',[]))
+        if not tags and candidate:
+            for analysis in candidate['analysis'].values():
+                if isinstance(analysis,dict): tags.extend(analysis.get('tags',[]))
+        direction={'/喜欢':'positive','/少来点':'negative'}.get(payload['text'])
+        if direction is None or not tags:
+            if self.agent is None:
+                direction=direction or 'unknown'
+            else:
+                task=AgentTask(digest(['feedback',signal['signal_id']]),'feedback',event.ref.group_id,
+                    self.clock()+agent_config(self.settings.data,'feedback')['timeout_seconds'],bundle=bundle,
+                    preferences=self.store.group_state(event.ref.account_id,event.ref.group_id)['preferences'],
+                    feedback={'text':payload['text'],'target_message_id':target.message_id,'evidence_id':event.ref.key,'known_tags':tags})
+                result=await self.agent.run(task)
+                direction=(result.direction or 'unknown') if result.decision=='eligible' and not result.risks else 'unknown'
+                if signal['kind']=='explicit': direction={'/喜欢':'positive','/少来点':'negative'}[payload['text']]
+                tags=tags or list(result.tags)
+                payload.update(reason=result.reason,usage=result.usage)
+                payload['ordinary_chat']=signal['kind']=='reply' and result.decision=='rejected' and result.direction in {None,'unknown'}
+        payload['quoted_summary']='\n'.join(str(segment.get('data',{}).get('text',''))
+            for message in bundle.messages for segment in message.segments if segment.get('type')=='text')[:400]
+        payload.update(processing='done',recognized=direction in {'positive','negative'})
+        return self.store.complete_feedback(signal['signal_id'],bundle_id=subject['bundle_id'],
+                    publication_id=subject['fingerprint'],direction=direction or 'unknown',tags=list(dict.fromkeys(tags)),
+                    payload=payload,expires_at=bundle.expires_at,now=self.clock())
+
+    def examples(self,account_id,group_id,limit=6):
+        rows=self.store.feedback_since(account_id,group_id,self.clock()-7*DAY,now=self.clock())
+        examples=[];seen=set()
+        for row in reversed(rows):
+            key=(row['publication_id'],row['user_id'])
+            if key in seen or row['direction'] not in {'positive','negative'} or row['kind']=='reaction': continue
+            seen.add(key)
+            examples.append({'direction':row['direction'],'tags':row['tags'],'text':row['payload'].get('text','')[:300],'quoted_summary':row['payload'].get('quoted_summary','')[:400]})
+            if len(examples)>=limit: break
+        return examples
 
     def learn(self,account_id,group_id):
         state=self.store.group_state(account_id,group_id); current=self.clock()

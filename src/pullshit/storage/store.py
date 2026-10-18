@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterator
 
-from pullshit.contracts import DAY, ChatMessage, ContentBundle, MessageRef, canonical, platform_id
+from pullshit.contracts import DAY, ChatMessage, ContentBundle, MessageRef, canonical, platform_id, digest
 
 MESSAGE_LIFETIME = 3 * DAY
 DELIVERY_RETENTION = 90 * DAY
@@ -29,7 +29,7 @@ TABLES = ('candidates', 'daily_budgets', 'deliveries', 'feedback', 'group_state'
 CANDIDATE_STATUSES = frozenset({'collected', 'bundled', 'analyzed', 'eligible', 'rejected', 'needs_review', 'cancelled'})
 FEEDBACK_DIRECTIONS = frozenset({'positive', 'negative', 'unknown'})
 GROUP_STATE_FIELDS = ('paused', 'preferences', 'version', 'snapshots', 'last_learning_at', 'last_cleanup_at')
-LIMIT_KEYS = ('min_interval_seconds', 'daily_batches', 'daily_nodes', 'daily_publish_bytes')
+LIMIT_KEYS = ('min_interval_seconds', 'daily_batches', 'daily_segments', 'daily_publish_bytes')
 DELIVERY_KEYS = ('delivery_id', 'account_id', 'group_id', 'bundle_id', 'fingerprint', 'part_index', 'part_total',
                  'nodes', 'estimated_bytes', 'node_count', 'expires_at', 'created_at', 'tags')
 FEEDBACK_KEYS = ('signal_id', 'account_id', 'group_id', 'bundle_id', 'publication_id', 'user_id', 'kind',
@@ -346,6 +346,61 @@ class Store:
 
     # --------------------------------------------------------------- candidates
 
+    def unassigned_refs(self, refs, now=None):
+        """Return roots not already assigned to a durable discovery observation."""
+        keys=canonical([ref.key for ref in refs])
+        rows=self.db.execute(
+            "SELECT DISTINCT r.value FROM candidates c, json_each(c.body,'$.trigger_refs') r "
+            "WHERE c.body IS NOT NULL AND c.expires_at>? AND c.status!='bundled' "
+            "AND json_extract(c.body,'$.publication.version') IS NULL "
+            "AND r.value IN (SELECT value FROM json_each(?))",(self._now(now),keys)).fetchall()
+        assigned={row[0] for row in rows}
+        return [ref for ref in refs if ref.key not in assigned]
+
+    def unit_history(self, unit_key, now=None):
+        """Read a bounded review summary; messages and identities are not copied into summaries."""
+        rows = self.db.execute(
+            "SELECT c.bundle_id,c.analysis FROM candidates c "
+            "WHERE c.expires_at>? AND c.analysis IS NOT NULL AND EXISTS "
+            "(SELECT 1 FROM json_each(c.analysis,'$._selection.unit_keys') u WHERE u.value=?) "
+            "ORDER BY c.created_at DESC LIMIT 3", (self._now(now),unit_key)).fetchall()
+        statuses=self.db.execute(
+            "SELECT DISTINCT d.status FROM deliveries d JOIN candidates c ON c.bundle_id=d.bundle_id "
+            "WHERE d.expires_at>? AND c.body IS NOT NULL AND EXISTS "
+            "(SELECT 1 FROM json_each(c.body,'$.publication.unit_keys') u WHERE u.value=?)",
+            (self._now(now),unit_key)).fetchall() if rows else []
+        summaries=[]
+        for row in rows:
+            review=json.loads(row['analysis'])['_selection']
+            summaries.append({'observation_id':row['bundle_id'],'decision':review['decision'],
+                              'reason':review['reason'][:600],'selected':unit_key in review.get('selected_keys',[]),
+                              'delivery_statuses':sorted(item[0] for item in statuses)})
+        return summaries
+
+    def seen_publication(self, account, group, bundle, now=None):
+        """Suppress a repeated image core, or a fully covered text selection, per recipient."""
+        manifest = bundle.publication
+        wanted = set(manifest.get('image_components') or manifest.get('components', []))
+        if not wanted:
+            return False
+        scope=(account,group,self._now(now),bundle.fingerprint)
+        rows=self.db.execute(
+            "SELECT DISTINCT p.value FROM deliveries d JOIN candidates c ON d.bundle_id=c.bundle_id, "
+            "json_each(c.body,'$.publication.components') p "
+            "WHERE d.account_id=? AND d.group_id=? AND d.expires_at>? AND c.body IS NOT NULL "
+            "AND d.status IN ('queued','sending','sent','unknown','failed') AND d.fingerprint!=? "
+            "AND p.value IN (SELECT value FROM json_each(?))",(*scope,canonical(sorted(wanted)))).fetchall()
+        seen={row[0] for row in rows}
+        if manifest.get('image_components'):
+            legacy=self.db.execute(
+                "SELECT DISTINCT json_extract(m.value,'$.sha256') FROM deliveries d "
+                "JOIN candidates c ON d.bundle_id=c.bundle_id, json_each(c.body,'$.media') m "
+                "WHERE d.account_id=? AND d.group_id=? AND d.expires_at>? AND c.body IS NOT NULL "
+                "AND d.status IN ('queued','sending','sent','unknown','failed') AND d.fingerprint!=? "
+                "AND json_extract(c.body,'$.publication.version') IS NULL",scope).fetchall()
+            seen.update(digest(['image',row[0]]) for row in legacy if row[0])
+        return wanted <= seen
+
     def put_candidate(self, bundle: ContentBundle, analysis: dict | None = None) -> bool:
         """Insert a content bundle; return True only when the id was new.
 
@@ -532,6 +587,10 @@ class Store:
             'error_code': row['error_code'], 'attempted_at': row['attempted_at'],
         }
 
+    def cancel_delivery(self, delivery_id: str, reason: str) -> None:
+        self.db.execute("UPDATE deliveries SET status='cancelled', error_code=? WHERE delivery_id=? AND status IN ('queued','failed')",
+                        (reason,delivery_id))
+
     def get_delivery(self, delivery_id: str) -> dict | None:
         row = self.db.execute('SELECT * FROM deliveries WHERE delivery_id=?', (delivery_id,)).fetchone()
         return None if row is None else self._delivery_dict(row)
@@ -597,7 +656,7 @@ class Store:
                 day = self._utc_day(when)
                 scope = f'{account_id}:{group_id}'
                 reserved = (self._reserve(day, scope, 'batches', 1, limits['daily_batches'])
-                            and self._reserve(day, scope, 'nodes', row['node_count'], limits['daily_nodes'])
+                            and self._reserve(day, scope, 'nodes', row['node_count'], limits['daily_segments'])
                             and self._reserve(day, 'global', 'publish_bytes', row['estimated_bytes'],
                                               limits['daily_publish_bytes']))
                 if not reserved:
@@ -671,7 +730,7 @@ class Store:
         missing = [key for key in LIMIT_KEYS if key not in limits]
         if missing:
             raise ValueError(f'missing limits: {missing}')
-        for key in ('daily_batches', 'daily_nodes'):
+        for key in ('daily_batches', 'daily_segments'):
             value = limits[key]
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f'invalid limits.{key}')
@@ -726,6 +785,45 @@ class Store:
                             (active, signal_id, active))
             return False
         return True
+
+    @staticmethod
+    def _feedback_dict(row: sqlite3.Row) -> dict:
+        result=dict(row)
+        result['tags']=json.loads(result['tags'])
+        result['payload']=json.loads(result['payload'])
+        result['active']=bool(result['active'])
+        return result
+
+    def get_feedback(self, signal_id: str, now: float | None = None) -> dict | None:
+        row=self.db.execute('SELECT * FROM feedback WHERE signal_id=? AND expires_at>?',
+                            (signal_id,self._now(now))).fetchone()
+        return self._feedback_dict(row) if row else None
+
+    def pending_feedback(self, account_id: str, groups: set[str], *, now: float | None = None, limit: int = 200) -> list[dict]:
+        if not groups: return []
+        allowed=sorted(groups); placeholders=','.join('?' for _ in allowed)
+        rows=self.db.execute("SELECT * FROM feedback WHERE account_id=? AND active=1 AND expires_at>? "
+                             "AND json_extract(payload,'$.processing')='pending' "
+                             f"AND group_id IN ({placeholders}) ORDER BY occurred_at,signal_id LIMIT ?",
+                             (account_id,self._now(now),*allowed,max(1,min(200,limit)))).fetchall()
+        return [self._feedback_dict(row) for row in rows]
+
+    def complete_feedback(self, signal_id: str, *, payload: dict, bundle_id: str | None = None,
+                          publication_id: str | None = None, direction: str = 'unknown',
+                          tags: list[str] | None = None, expires_at: float | None = None,
+                          now: float | None = None) -> dict | None:
+        if direction not in FEEDBACK_DIRECTIONS or not isinstance(payload,dict):
+            raise ValueError('invalid feedback result')
+        if tags is not None and (not isinstance(tags,list) or any(not isinstance(tag,str) for tag in tags)):
+            raise ValueError('invalid feedback tags')
+        current=self.get_feedback(signal_id,now=now)
+        if current is None: return None
+        expiry=current['expires_at'] if expires_at is None else min(current['expires_at'],self._number(expires_at,'expires_at'))
+        self.db.execute('UPDATE feedback SET bundle_id=COALESCE(?,bundle_id),publication_id=COALESCE(?,publication_id),'
+                        'direction=?,tags=?,payload=?,expires_at=? WHERE signal_id=?',
+                        (bundle_id,publication_id,direction,canonical(tags if tags is not None else current['tags']),
+                         canonical(payload),expiry,signal_id))
+        return self.get_feedback(signal_id,now=now)
 
     def feedback_since(self, account_id: str, group_id: str, since: float,
                        now: float | None = None) -> list[dict]:

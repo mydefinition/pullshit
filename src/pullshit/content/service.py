@@ -39,6 +39,7 @@ class _BuildState:
         self.media: list[MediaRef] = []
         self.media_hashes: dict[tuple, str] = {}
         self.seen_replies: set[str] = set()
+        self.origins: dict[str, str] = {}
 
 
 class ContentService:
@@ -58,7 +59,7 @@ class ContentService:
         self.message_days = float(retention['message_days'])
         self.content_days = float(retention['content_days'])
 
-    async def build(self, refs: MessageRef | list[MessageRef]) -> ContentBundle:
+    async def build(self, refs: MessageRef | list[MessageRef], *, media_limit=None) -> ContentBundle:
         if isinstance(refs, MessageRef):
             refs = [refs]
         started = self.clock()
@@ -68,11 +69,14 @@ class ContentService:
             async with asyncio.timeout(self.timeout_seconds):
                 for ref in refs:
                     await self._resolve(ref, 0, state)
-                await self._cache_media(state)
+                await self._cache_media(state,media_limit)
         except TimeoutError:
             state.issues.append('timeout')
         state.issues = list(dict.fromkeys(state.issues))
-        return self._bundle(state, started)
+        bundle = self._bundle(state, started)
+        bundle.trigger_refs = list(dict.fromkeys(ref.key for ref in refs))
+        bundle.origins = state.origins
+        return bundle
 
     async def _resolve(self, ref: MessageRef, reply_level: int, state: _BuildState, path=()) -> ChatMessage | None:
         if ref.group_id not in self.settings.sources | self.settings.targets or (self.settings.account_id and ref.account_id != self.settings.account_id):
@@ -216,6 +220,7 @@ class ContentService:
                 segments=[], own=user_id == outer_ref.account_id, recalled=False,
                 expires_at=occurred + self.message_days * DAY)
             state.messages.append(message)
+            state.origins[node_ref.key] = state.origins.get(outer_ref.key, outer_ref.key)
             message.segments = self._node_segments(node_ref, occurred, data.get('content'),
                                                   node_path, prefix, branch, level, state)
 
@@ -263,15 +268,20 @@ class ContentService:
             result.append({'type': item['type'], 'data': dict(item_data)})
         return result
 
-    async def _cache_media(self, state: _BuildState) -> None:
+    async def _cache_media(self, state: _BuildState, media_limit=None) -> None:
         if self.media_cache is None:
             return
+        attempts=0
         for message in state.messages:
             if message.recalled:
                 continue
             for index, segment in enumerate(message.segments):
                 if segment.get('type') != 'image':
                     continue
+                if media_limit is not None and attempts>=media_limit:
+                    state.issues.append(f'media_limit:{message.ref.key}')
+                    continue
+                attempts+=1
                 data = segment.get('data') if isinstance(segment.get('data'), dict) else {}
                 url = data.get('url')
                 if not isinstance(url, str) or not url:

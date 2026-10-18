@@ -7,10 +7,12 @@ import logging
 from pathlib import Path
 import time
 from pullshit.config import ConfigError,load_settings
+from pullshit.config import agent_config
 from pullshit.contracts import AgentTask,ChatEvent,ContentBundle,DAY,MessageRef,digest
 from pullshit.feedback.service import FeedbackService
 from pullshit.publishing.service import Publisher,PublishRejected
 from pullshit.runtime.maintenance import Maintenance
+from pullshit.content import selection
 
 class Service:
     def __init__(self,root,profile,*,gateway_factory=None,agent_factory=None,clock=time.time):
@@ -20,7 +22,7 @@ class Service:
         self.gateway=None; self.store=None; self.agent=None; self.content=None; self.media=None
         self.failure=asyncio.Event(); self.background_error=None; self.control_replies={};
         self.tasks=set(); self.queue=asyncio.Queue(maxsize=200); self.feedback_queue=asyncio.Queue(maxsize=200)
-        self.collecting=set(); self.analyzing=set(); self.stopping=False
+        self.collecting=set(); self.analyzing=set(); self.feedback_scheduled=set(); self.feedback_replies={}; self.stopping=False
         self.logger=logging.getLogger('pullshit')
 
     def effective(self):
@@ -29,13 +31,19 @@ class Service:
 
     async def tools(self,name,args,task):
         if name=='get_group_preferences':
-            return self.store.group_state(self.gateway.account_id,task.target_group_id)['preferences']
+            group=args.get('group_id',task.target_group_id)
+            effective=self.effective(); allowed=effective.targets if task.kind=='selection' else effective.sources|effective.targets
+            if group not in task.audience or group not in allowed: return {'error':'reference_not_authorized'}
+            return self.store.group_state(self.gateway.account_id,group)['preferences']
         if name=='get_context' and task.bundle is not None:
+            if task.kind=='selection' and task.selection:
+                return await selection.expand(task,args,self.effective(),self.store,self.content,self.clock())
             group=args.get('group_id'); message=args.get('message_id')
             if group is None and message is None:
                 return {'bundle':asdict(task.bundle)}
             permitted=[ref for ref in task.bundle.sources if (group is None or ref.group_id==group) and (message is None or ref.message_id==message)]
-            if len(permitted)!=1 or permitted[0].group_id not in self.effective().sources:
+            effective=self.effective(); allowed=effective.sources if task.kind=='selection' else effective.sources|effective.targets
+            if len(permitted)!=1 or permitted[0].group_id not in allowed:
                 return {'error':'reference_not_authorized'}
             return {'bundle':asdict(await self.content.build(permitted[0]))}
         if name=='submit_analysis': return {'accepted':True}
@@ -64,8 +72,8 @@ class Service:
         paused=self.store.paused(event.ref.account_id,key)
         queued=len(self.store.deliveries(status='queued',group_id=key,now=current))
         text=f'pullshit：本群发布暂停={paused}；待发分片={queued}。'
-        nodes=[{'type':'node','data':{'user_id':self.gateway.account_id,'nickname':'pullshit','content':[{'type':'text','data':{'text':text}}]}}]
-        try: await self.gateway.send_forward(key,nodes)
+        segments=[{'type':'text','data':{'text':text}}]
+        try: await self.gateway.send_message(key,segments)
         except Exception: self.logger.warning('control reply unavailable')
 
     def schedule(self,refs,nominated=False):
@@ -78,6 +86,9 @@ class Service:
         while True:
             refs,nominated=await self.queue.get(); key=tuple(ref.key for ref in refs)
             try:
+                if not nominated:
+                    refs=self.store.unassigned_refs(refs,now=self.clock())
+                if not refs: continue
                 bundle=await self.content.build(refs)
                 if bundle.expires_at<=self.clock() or not bundle.messages: continue
                 text=''.join(str(s.get('data',{}).get('text','')) for m in bundle.messages for s in m.segments if s.get('type')=='text')
@@ -94,31 +105,46 @@ class Service:
     async def analyze(self,candidate):
         bundle=candidate['bundle']; self.analyzing.add(bundle.bundle_id)
         try:
-            settings=self.effective(); analyses=dict(candidate['analysis'])
-            targets={target for source,target in settings.routes if any(ref.group_id==source for ref in bundle.sources)}
-            for target in sorted(targets):
-                if not all(settings.permits(ref.group_id,target) for ref in bundle.sources): continue
-                task=AgentTask(digest([bundle.bundle_id,target,'selection']),'selection',target,
-                               min(bundle.expires_at,self.clock()+settings.data['agent']['timeout_seconds']),bundle,
-                               self.store.group_state(self.gateway.account_id,target)['preferences'],
-                               limits={'model_calls':settings.data['agent']['model_calls'],'tool_calls':settings.data['agent']['tool_calls'],
-                                       'output_tokens':settings.data['agent']['max_output_tokens'],'input_characters':settings.data['agent']['max_input_characters']})
-                if Publisher.incomplete_reason(bundle):
-                    from pullshit.contracts import AgentResult
-                    result=AgentResult('needs_review',reason='context_incomplete')
-                else:
-                    result=await self.agent.run(task)
-                current=self.store.get_candidate(bundle.bundle_id,now=self.clock())
-                if current is None or current['status']=='cancelled': return
-                analyses[target]=asdict(result)
-            status='analyzed' if analyses else 'needs_review'
-            self.store.set_candidate_status(bundle.bundle_id,status,analysis=analyses)
-            for target,value in analyses.items():
+            settings=self.effective(); targets=sorted(settings.broadcast_targets(bundle))
+            connector=agent_config(settings.data,'selection')
+            if not targets:
+                self.store.set_candidate_status(bundle.bundle_id,'analyzed',analysis={}); return
+            preferences={}
+            for target in targets:
+                for tag,value in self.store.group_state(self.gateway.account_id,target)['preferences'].items():
+                    preferences[tag]=preferences.get(tag,0)+float(value)/len(targets)
+            task=AgentTask(digest([bundle.bundle_id,'selection']),'selection',targets[0],
+                           min(bundle.expires_at,self.clock()+connector['timeout_seconds']),bundle,
+                           preferences, target_group_ids=targets,
+                           feedback={'recent_examples':{group:examples for group in set(targets)|{ref.group_id for ref in bundle.sources}
+                                      if (examples:=self.feedback.examples(self.gateway.account_id,group))}},
+                           limits={'model_calls':settings.data['agent']['model_calls'],'tool_calls':settings.data['agent']['tool_calls'],
+                                   'output_tokens':settings.data['agent']['max_output_tokens'],'input_characters':connector['max_input_characters']})
+            selection.prepare(task,self.store,settings.data['context'])
+            task.selection['observation_id']=bundle.bundle_id
+            result=await self.agent.run(task)
+            current=self.store.get_candidate(bundle.bundle_id,now=self.clock())
+            if current is None or current['status']=='cancelled': return
+            problem=selection.validate(task,result,result.inspected_images)
+            if problem:
                 from pullshit.contracts import AgentResult
-                try: self.publisher.enqueue(bundle,target,AgentResult.from_dict(value))
-                except PublishRejected as error:
-                    self.logger.info('publication withheld: candidate=%s target=%s reason=%s',
-                                     bundle.bundle_id[:12],target,str(error))
+                result=AgentResult('needs_review',reason=problem,usage=result.usage)
+            analyses={target:asdict(result) for target in targets}
+            analyses['_selection']={'unit_keys':[unit['key'] for unit in task.selection['units'] if unit['new']],
+                                    'decision':result.decision,'reason':result.reason[:600],
+                                    'selected_keys':[unit['key'] for unit in task.selection['units']
+                                                     if any(unit['id'] in item['publish_ids'] for item in result.selections)]}
+            self.store.set_candidate_status(bundle.bundle_id,'analyzed',analysis=analyses)
+            if result.decision=='eligible':
+                for selected,analysis in selection.publications(task,result):
+                    audience=sorted(settings.broadcast_targets(selected))
+                    self.store.put_candidate(selected)
+                    self.store.set_candidate_status(selected.bundle_id,'analyzed',analysis={target:asdict(analysis) for target in audience})
+                    for target in audience:
+                        try: self.publisher.enqueue(selected,target,analysis)
+                        except PublishRejected as error:
+                            self.logger.info('publication withheld: candidate=%s target=%s reason=%s',
+                                             selected.bundle_id[:12],target,str(error))
         except asyncio.CancelledError: raise
         except Exception:
             self.logger.warning('selection task failed')
@@ -126,12 +152,50 @@ class Service:
             if current and current['status']!='cancelled': self.store.set_candidate_status(bundle.bundle_id,'needs_review')
         finally: self.analyzing.discard(bundle.bundle_id)
 
+    def schedule_feedback(self,event):
+        self.feedback.settings=self.effective()
+        if event.kind=='message':
+            signal=self.feedback.capture(event)
+            if signal is None: return False
+            if signal['payload'].get('processing')!='pending': return True
+        elif event.kind!='reaction': return False
+        if event.ref.key in self.feedback_scheduled: return True
+        try:
+            self.feedback_queue.put_nowait(event); self.feedback_scheduled.add(event.ref.key)
+        except asyncio.QueueFull: self.logger.warning('feedback queue full; persisted replies retained')
+        return True
+
+    async def feedback_reply(self,event,signal):
+        if not signal or signal['direction'] not in {'positive','negative'} or signal['kind']=='reaction': return
+        if signal['payload'].get('ack_state'): return
+        settings=self.effective(); current=self.clock(); group=event.ref.group_id
+        if settings.data['runtime']['mode']!='auto' or not settings.data['sending']['enabled']: return
+        recent=[stamp for stamp in self.feedback_replies.get(group,[]) if stamp>current-60]
+        if len(recent)>=5: return
+        recent.append(current); self.feedback_replies[group]=recent
+        payload={**signal['payload'],'ack_state':'attempted'}
+        self.store.complete_feedback(signal['signal_id'],payload=payload,direction=signal['direction'],now=current)
+        text='收到，记下了：你喜欢这条内容。' if signal['direction']=='positive' else '收到，记下了：这类内容你不喜欢。'
+        def before_send():
+            latest=self.effective()
+            if (group not in latest.sources|latest.targets or latest.data['runtime']['mode']!='auto'
+                    or not latest.data['sending']['enabled']): raise PublishRejected('feedback_reply_disabled')
+        try:
+            before_send(); await self.gateway.reply(event.ref,text,before_send=before_send)
+        except Exception: self.logger.warning('feedback confirmation unavailable')
+
     async def feedback_worker(self):
         while True:
             event=await self.feedback_queue.get()
-            try: await self.feedback.apply(event)
+            try:
+                self.feedback.settings=self.effective()
+                signal=await self.feedback.apply(event)
+                await self.feedback_reply(event,signal)
+                if signal and signal['payload'].get('ordinary_chat') and event.message and event.ref.group_id in self.effective().sources:
+                    self.window.add(event.message)
             except Exception: self.logger.warning('feedback interpretation failed')
-            finally: self.feedback_queue.task_done()
+            finally:
+                self.feedback_scheduled.discard(event.ref.key); self.feedback_queue.task_done()
 
     async def handle(self,event):
         settings=self.effective()
@@ -139,7 +203,8 @@ class Service:
         if event.kind=='recall':
             self.store.recall_message(event.ref,now=self.clock())
             for candidate in self.store.list_candidates(limit=1000,now=self.clock()):
-                if event.ref in candidate['bundle'].sources: self.store.cancel_candidate(candidate['bundle'].bundle_id,'source_recalled')
+                if candidate['bundle'].publication and event.ref in candidate['bundle'].sources:
+                    self.store.cancel_candidate(candidate['bundle'].bundle_id,'source_recalled')
             return
         if event.kind=='message' and event.message:
             message=event.message
@@ -153,11 +218,10 @@ class Service:
                 self.logger.info('group control applied: %s',text); return
             if text=='/搬' and event.ref.group_id in settings.sources and len(replies)==1:
                 self.schedule([MessageRef(event.ref.account_id,event.ref.group_id,str(replies[0]))],True); return
+            if self.schedule_feedback(event): return
             if event.ref.group_id in settings.sources and not text.startswith('/'):
                 self.window.add(message)
-        if event.ref.group_id in settings.targets:
-            try: self.feedback_queue.put_nowait(event)
-            except asyncio.QueueFull: self.logger.warning('feedback queue full')
+        if event.kind=='reaction': self.schedule_feedback(event)
 
     async def consume(self,gateway,max_events):
         count=0
@@ -179,6 +243,7 @@ class Service:
                     if candidate['bundle'].bundle_id in self.analyzing: continue
                     self.analyzing.add(candidate['bundle'].bundle_id); self.spawn(self.analyze(candidate)); capacity-=1
                     if capacity<=0: break
+            for event in self.feedback.pending_events(self.gateway.account_id): self.schedule_feedback(event)
             await self.publisher.dispatch_once()
             if self.maintenance.due(): self.maintenance.clean()
             for group in self.effective().targets: self.feedback.learn(self.gateway.account_id,group)
@@ -208,7 +273,7 @@ class Service:
                         self.gateway=gateway; self.settings=current.with_account(gateway.account_id)
                         self.content=ContentService(self.settings,self.store,gateway,self.media,clock=self.clock)
                         self.publisher=Publisher(self.settings,self.store,gateway,settings_provider=self.effective,clock=self.clock)
-                        self.feedback=FeedbackService(self.settings,self.store,self.agent,clock=self.clock)
+                        self.feedback=FeedbackService(self.settings,self.store,self.agent,content=self.content,clock=self.clock)
                         self.maintenance=Maintenance(self.settings,self.store,self.media,getattr(self.agent,'clean_stale_workers',clean_stale_workers),clock=self.clock)
                         self.maintenance.clean(compact=True)
                         background=[self.spawn(self.collect_worker()) for _ in range(2)]

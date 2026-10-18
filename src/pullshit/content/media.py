@@ -462,12 +462,12 @@ class MediaCache:
 
 
 class ContentWindow:
-    """Bounded quiet window over incoming messages, grouped by author.
+    """Bounded quiet window over incoming messages, grouped by account and group.
 
     The window closes when the newest message is `quiet_seconds` old, when the
     oldest is `max_wait_seconds` old, when `max_messages` accumulate, or on
     force. Flushed groups follow first-arrival order and keep arrival order
-    inside each (account, group, user) group.
+    inside each (account, group) observation.
     """
 
     def __init__(self, quiet_seconds: float, max_wait_seconds: float, max_messages: int):
@@ -484,6 +484,8 @@ class ContentWindow:
         self._forced = False
 
     def add(self, message) -> None:
+        if any(item.ref == message.ref for item in self._buffer):
+            return
         self._buffer.append(message)
         if len(self._buffer) >= self.max_messages:
             self._forced = True
@@ -491,10 +493,10 @@ class ContentWindow:
     def due(self, now: float, force: bool = False) -> list[list[MessageRef]]:
         groups={}
         for message in self._buffer:
-            groups.setdefault((message.ref.account_id,message.ref.group_id,message.user_id),[]).append(message)
+            groups.setdefault((message.ref.account_id,message.ref.group_id),[]).append(message)
         result=[]; remaining=[]
         for messages in groups.values():
-            if force or len(messages)>=self.max_messages or now-messages[-1].occurred_at>=self.quiet_seconds or now-messages[0].occurred_at>=self.max_wait_seconds:
+            if force or self._forced or len(messages)>=self.max_messages or now-messages[-1].occurred_at>=self.quiet_seconds or now-messages[0].occurred_at>=self.max_wait_seconds:
                 result.append([m.ref for m in messages])
             else: remaining.extend(messages)
         self._buffer=remaining; self._forced=False
