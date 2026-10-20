@@ -51,6 +51,8 @@ def normalize_analysis(raw, kind: str) -> tuple[dict | None, list[str]]:
             errors.append('feedback_with_selections')
     else:
         result.direction = None
+    if kind=='review' and result.selections:
+        errors.append('review_cannot_select_content')
     if errors:
         return None, errors
     return {

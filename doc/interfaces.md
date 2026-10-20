@@ -9,9 +9,9 @@
 | MessageRef | account_id、group_id、message_id；字符串 ID，消息 ID 可为负 |
 | ChatMessage | ref、user_id、nickname、occurred_at、segments、own、recalled、expires_at |
 | ChatEvent | kind=message/recall/reaction、ref、event_id、occurred_at、user_id 及对应消息／表情字段 |
-| ContentBundle | bundle_id、fingerprint、messages、media、issues、trigger_refs、origins、publication、forwards、created_at、expires_at |
+| ContentBundle | bundle_id、fingerprint、messages、media、issues、trigger_refs、origins、publication、forwards、review、created_at、expires_at |
 | MediaRef | reference_id、source、path、sha256、size、mime、expires_at |
-| AgentTask | task_id、kind=selection/feedback、target_group_id、target_group_ids、deadline、bundle、preferences、feedback、limits、selection |
+| AgentTask | task_id、kind=selection/feedback/review、target_group_id、target_group_ids、deadline、bundle、preferences、feedback、limits、selection、review |
 | AgentResult | decision、score、tags、risks、evidence_ids、reason、usage、inspected_images、direction、selections、snapshot_id、snapshot_revision |
 
 `AgentResult.decision` 为 eligible/rejected/needs_review，score 范围 0–1；direction 为 positive/negative/unknown。evidence_ids 支持本任务 U 编号、消息 ID、完整 MessageRef.key 和媒体 reference_id；反馈任务还可引用本次反馈的 evidence_id。来源与图片证据必须属于当前任务。字段结构由 `contracts.py` 定义，worker 输出语义由 `agent/protocol.py` 统一校验。
@@ -19,6 +19,8 @@
 `eligible` 要求 `risks` 为空。选材结果携带匹配当前任务的 snapshot_id 与 snapshot_revision，selections 为最多 20 份独立选择，每份含 publish_ids、context_status、completeness_reason、reason，可覆盖 score、tags、risks。结合历史单元时还须填写 new_value_reason，解释新增材料的实质贡献。每份必须 context_status=complete、无阻断风险、达到分数阈值，并包含本轮新增单元。发布编号必须存在、可发布且跨项无重复；所选图片必须完成 inspect_image。零份选择使用 rejected 或 needs_review。证据编号与实际发布编号分别校验。普通质量取舍写入 reason；群口味为空时按通用娱乐目标判断。提交工具与最终响应共用校验。
 
 平台引用使用十进制 ID；展开的嵌入节点使用 `embedded:` 内部引用。`ContentBundle.sources` 只包含可验证的外层平台引用，内部引用绑定外层账号与群。选材任务的 `target_group_ids` 携带全部广播目标，`target_group_id` 为其中一个上下文目标；空列表使用该单目标。引用反馈任务使用具体 `target_group_id`。每份内容只选材一次，结论供全部广播目标使用；群偏好影响综合选材和待发优先级。
+
+审查任务的 AgentTask.review 含启用策略、minimum_score、policy_digest 与 subject_digest；kind=review 使用独立 llm 会话。AgentResult 的 eligible 表示策略全部通过，rejected 表示命中策略，needs_review 表示不确定；reason 说明依据，risks 可记录命中策略 id，selections 为空。审查独立检查所有媒体，费用 usage.complete 必须为 true。ContentBundle.review 保存结论、分数、理由、图片证据、费用、task_id、reviewed_at 及绑定摘要；Publisher 在入队及实际发送前检查，默认缺少有效审查记录即阻断。
 
 ## Python 模块
 
@@ -36,6 +38,8 @@
 | content.selection.prepare / view / validate / publications | 分配原子编号、生成模型视图、校验选择、组装独立发布内容 |
 | get_context(anchor_id, mode, reason) | 以现有编号读取 reply、nearby 或 history；任务共享次数、单元、字符与图片预算 |
 | HermesExecutor.run(task) / cancel(task_id) | 按任务连接配置执行 Hermes LLM 或候选 SystemOne worker／取消进程组 |
+| content.review.run(bundle, audience, settings, agent) | 固定实际待发内容与配置策略，独立审查整份内容，返回绑定摘要的审查记录 |
+| Store.record_review(bundle_id, record) | 将审查记录保存至候选 JSON，保留原发布内容与已取消状态 |
 | Publisher.enqueue(bundle, target, analysis) | 校验带 publication 清单的独立发布内容及广播范围、去重，建立目标群分片任务，返回 delivery_id 列表 |
 | Publisher.dispatch_once() | 执行一个可发送分片，或返回无可执行任务 |
 | FeedbackService.capture(event) | 校验顶层 @机器人后，将引用反馈意图同步写入 feedback，返回幂等记录 |
@@ -173,5 +177,5 @@ curl --fail-with-body -sS http://127.0.0.1:18700/v1/simulation-forwards \
 
 引用正文、合并转发节点、OCR 和模型输入中的命令保持为素材。管理员命令通过真实事件的发送者校验；普通成员可以提供偏好反馈，硬规则由管理员配置。
 
-最后修改时间：2026-10-20T04:42:48Z
+最后修改时间：2026-10-20T07:30:38Z
 模型署名：GPT-6

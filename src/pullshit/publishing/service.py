@@ -37,6 +37,9 @@ class Publisher:
         if self.incomplete_reason(bundle):
             raise PublishRejected('context_incomplete')
         if analysis.decision != 'eligible' or analysis.risks: raise PublishRejected('analysis_not_eligible')
+        from pullshit.content.review import check
+        problem=check(bundle,settings)
+        if problem: raise PublishRejected(problem)
         if analysis.score < settings.data['agent']['minimum_score']: raise PublishRejected('score_too_low')
         if any(media.reference_id not in analysis.inspected_images for media in bundle.media): raise PublishRejected('image_not_inspected')
         components=[]; images=[]; forwards=[]

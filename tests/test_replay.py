@@ -18,7 +18,7 @@ class ReplayTests(Workspace):
               {**base,'time':102,'group_id':900201,'message_id':3,'message':[{'type':'reply','data':{'id':'1001'}},{'type':'at','data':{'qq':'900001'}},{'type':'text','data':{'text':'/喜欢'}}]}]
         self.fixture.write_text('\n'.join(json.dumps(row,ensure_ascii=False) for row in rows))
     def test_cli_replay_selection_publication_feedback_and_duplicate_replay(self):
-        decisions=self.root/'decisions.json'; decisions.write_text(json.dumps({'*':{'decision':'eligible','score':.95,'tags':['test'],'selections':[{'publish_ids':['U001'],'context_status':'complete','completeness_reason':'independent text','reason':'test'}]}}))
+        decisions=self.root/'decisions.json'; decisions.write_text(json.dumps({'*':{'decision':'eligible','score':.95,'tags':['test'],'selections':[{'publish_ids':['U001'],'context_status':'complete','completeness_reason':'independent text','reason':'test'}]},'review:*':{'decision':'eligible','score':.95,'reason':'review clear'}}))
         result=self.command('--decisions',str(decisions)); self.assertEqual(result.returncode,0,result.stderr)
         report=json.loads(result.stdout); self.assertTrue(report['simulation']); self.assertEqual(report['publications'],[{'group_id':'900201','segments':1}])
         self.assertEqual(report['state']['feedback'],1)

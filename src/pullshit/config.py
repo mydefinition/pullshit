@@ -15,13 +15,15 @@ class ConfigError(ValueError):
 def agent_config(data, kind):
     """Resolve one task's connector while sharing execution and expense limits."""
     base=data['agent']
-    result={key:copy.deepcopy(value) for key,value in base.items() if key not in {'selection','feedback'}}
+    result={key:copy.deepcopy(value) for key,value in base.items() if key not in {'selection','feedback','review'}}
     role=base.get(kind,{})
     for key,value in role.items():
         if key in {'api_format','free'} or value:
             result[key]=value
     result.setdefault('api_format','llm')
     result.setdefault('free',False)
+    if kind=='review':
+        result['minimum_score']=data['review']['minimum_score']
     return result
 
 def merge(base, overlay):
@@ -80,7 +82,7 @@ class Settings:
         if parsed.scheme not in {'ws','wss'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ConfigError('NapCat 地址无效')
         if not self.token(): raise ConfigError('缺少 NapCat token 环境变量')
-        for kind in ('selection','feedback'):
+        for kind in ('selection','feedback',*(['review'] if self.data['review']['enabled'] else [])):
             connector=agent_config(self.data,kind)
             if not connector['model'] or not connector['base_url'] or not os.environ.get(connector['api_key_env']):
                 raise ConfigError(f'缺少 {kind} 模型连接配置')
@@ -119,7 +121,7 @@ def load_settings(root: Path,profile: str) -> Settings:
     for key in ('daily_budget_usd','task_budget_usd','input_usd_per_million','output_usd_per_million','vision_input_usd_per_million','vision_output_usd_per_million'):
         if not math.isfinite(value['agent'][key]) or value['agent'][key] < 0: raise ConfigError('模型预算与单价不能为负')
     if not 0 <= value['agent']['minimum_score'] <= 1: raise ConfigError('选材分数范围无效')
-    for kind in ('selection','feedback'):
+    for kind in ('selection','feedback','review'):
         role=value['agent'].get(kind,{})
         if role.get('api_format','llm') not in ({'llm','systemone'} if kind=='selection' else {'llm'}):
             raise ConfigError(f'{kind} API 格式无效；反馈仅支持 llm')
@@ -128,6 +130,23 @@ def load_settings(root: Path,profile: str) -> Settings:
         for key in ('timeout_seconds','max_input_characters'):
             if role.get(key,0)<0: raise ConfigError(f'{kind}.{key} 不能为负')
     decision=value['agent'].get('decision',{})
+    review=value['review']
+    if (isinstance(review['minimum_score'],bool) or not math.isfinite(review['minimum_score'])
+            or not 0<review['minimum_score']<=1):
+        raise ConfigError('审查置信度必须在 (0,1]')
+    identities=set()
+    if len(review['policies'])>20: raise ConfigError('审查策略最多 20 条')
+    for policy in review['policies']:
+        if (not isinstance(policy,dict) or set(policy)!={'id','enabled','instructions'}
+                or not isinstance(policy['id'],str) or not policy['id'].isascii()
+                or not policy['id'].replace('_','').replace('-','').isalnum() or len(policy['id'])>64
+                or policy['id'] in identities or type(policy['enabled']) is not bool
+                or not isinstance(policy['instructions'],str) or not policy['instructions'].strip()
+                or len(policy['instructions'])>8000):
+            raise ConfigError('审查策略需要唯一 id、enabled 和非空 instructions')
+        identities.add(policy['id'])
+    if review['enabled'] and not any(p['enabled'] for p in review['policies']):
+        raise ConfigError('启用审查时至少配置一条有效策略')
     if decision.get('think_mode','') not in {'','never','auto','always'}: raise ConfigError('决策思考模式无效')
     if not 1<=decision.get('max_units',16)<=24 or not 1<=decision.get('think_budget',512)<=4096:
         raise ConfigError('决策单元或思考预算范围无效')

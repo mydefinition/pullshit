@@ -45,6 +45,20 @@
       "max_units": 16,
       "think_mode": "never",
       "think_budget": 512
+    },
+    "review": {
+      "api_format": "llm"
     }
+  },
+  "review": {
+    "enabled": true,
+    "minimum_score": 0.8,
+    "policies": [
+      {
+        "id": "politics",
+        "enabled": true,
+        "instructions": "拦截涉及现实政治人物、政党、政权、政治事件或运动的宣传、争议、讽刺及影射内容，包括图片文字和符号。普通生活、技术、商业话题仅出现国家或地名不作为涉政依据；证据不足或影射无法确认时暂缓发布。"
+      }
+    ]
   }
 }

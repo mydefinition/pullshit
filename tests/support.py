@@ -15,7 +15,7 @@ class Workspace(unittest.TestCase):
         (self.root/'config/defaults.json').write_text((repo/'config/defaults.json').read_text())
         self.local={'authorization':{'source_group_ids':['900101'],'target_group_ids':['900201','900202'],
                                     'operator_qq_ids':['900301']},
-                    'sending':{'enabled':True}}
+                    'sending':{'enabled':True},'review':{'enabled':False}}
         self.write_config(); self.settings=load_settings(self.root,'development').with_account('900001'); self.current=time.time()
     def write_config(self):
         (self.root/'config/local/development.json').write_text(json.dumps(self.local))

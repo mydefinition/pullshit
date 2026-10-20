@@ -103,6 +103,7 @@ class ContentBundle:
     origins: dict[str, str] = field(default_factory=dict)
     publication: dict = field(default_factory=dict)
     forwards: dict = field(default_factory=dict)
+    review: dict = field(default_factory=dict)
 
     @property
     def sources(self) -> list[MessageRef]:
@@ -128,6 +129,7 @@ class AgentTask:
 
     target_group_ids: list[str] = field(default_factory=list)
     selection: dict = field(default_factory=dict)
+    review: dict = field(default_factory=dict)
 
     @property
     def audience(self) -> set[str]:

@@ -12,7 +12,7 @@ from pullshit.contracts import AgentTask,ChatEvent,ContentBundle,DAY,MessageRef,
 from pullshit.feedback.service import FeedbackService
 from pullshit.publishing.service import Publisher,PublishRejected
 from pullshit.runtime.maintenance import Maintenance
-from pullshit.content import selection
+from pullshit.content import selection,review
 
 class Service:
     def __init__(self,root,profile,*,gateway_factory=None,agent_factory=None,clock=time.time):
@@ -138,8 +138,28 @@ class Service:
             if result.decision=='eligible':
                 for selected,analysis in selection.publications(task,result):
                     audience=sorted(settings.broadcast_targets(selected))
+                    if not audience: continue
                     self.store.put_candidate(selected)
-                    self.store.set_candidate_status(selected.bundle_id,'analyzed',analysis={target:asdict(analysis) for target in audience})
+                    persisted=self.store.get_candidate(selected.bundle_id,now=self.clock())
+                    if persisted is None or persisted['status']=='cancelled': continue
+                    selected=persisted['bundle']
+                    latest=self.effective()
+                    if latest.data['review']['enabled']:
+                        self.store.set_candidate_status(selected.bundle_id,'needs_review',analysis={
+                            '_review':{'decision':'needs_review','reason':'review_pending'}})
+                        record=await review.run(selected,audience,latest,self.agent,clock=self.clock)
+                        current=self.store.get_candidate(selected.bundle_id,now=self.clock())
+                        if current is None or current['status']=='cancelled': continue
+                        self.store.record_review(selected.bundle_id,record)
+                        reviewed={target:asdict(analysis) for target in audience}
+                        reviewed['_review']=record
+                        if review.check(selected,self.effective()):
+                            status='rejected' if record['decision']=='rejected' else 'needs_review'
+                            self.store.set_candidate_status(selected.bundle_id,status,analysis=reviewed)
+                            continue
+                    else:
+                        reviewed={target:asdict(analysis) for target in audience}
+                    self.store.set_candidate_status(selected.bundle_id,'analyzed',analysis=reviewed)
                     for target in audience:
                         try: self.publisher.enqueue(selected,target,analysis)
                         except PublishRejected as error:

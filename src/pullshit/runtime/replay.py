@@ -21,10 +21,14 @@ class ReplayGateway:
 class ReplayAgent:
     def __init__(self,decisions): self.decisions=decisions
     async def run(self,task):
-        result=self.decisions.get(task.bundle.fingerprint,self.decisions.get(task.bundle.bundle_id,self.decisions.get('*')))
+        if task.kind=='review':
+            result=self.decisions.get('review:'+task.bundle.fingerprint,self.decisions.get('review:*'))
+        else:
+            result=self.decisions.get(task.bundle.fingerprint,self.decisions.get(task.bundle.bundle_id,self.decisions.get('*')))
         if result is None: return AgentResult('needs_review',reason='no_simulated_verdict')
         value=dict(result)
         value.setdefault('reason','explicit simulated verdict')
+        if task.kind=='review': value.setdefault('usage',{'complete':True})
         if task.kind=='selection':
             value.setdefault('snapshot_id',task.selection['snapshot_id'])
             value.setdefault('snapshot_revision',task.selection['revision'])

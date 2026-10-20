@@ -9,16 +9,18 @@ import unittest
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from unittest.mock import patch
 from pullshit.agent.executor import HermesExecutor
-from pullshit.contracts import AgentTask
+from pullshit.contracts import AgentTask,AgentResult
 from tests.support import Workspace,verdict
 
 SDK_PYTHON=Path(os.environ.get('PULLSHIT_HERMES_PYTHON',str(Path(__file__).resolve().parents[1]/'local/hermes-runtime/.venv/bin/python')))
 
 @unittest.skipUnless(SDK_PYTHON.is_file(),'Hermes worker interpreter is required for SDK integration')
 class HermesSdkTests(Workspace):
-    def configure(self,deny=False,image=False,conflicting=False):
+    def configure(self,deny=False,image=False,conflicting=False,review=False):
         self.requests=[]; self.user_agents=[]; self.image=image; self.image_ref=None
         owner=self
+        def answer():
+            return asdict(AgentResult('eligible',.95,reason='all configured review policies clear')) if review else asdict(verdict(owner.task))
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args): pass
             def do_POST(self):
@@ -35,14 +37,14 @@ class HermesSdkTests(Workspace):
                     if owner.image:
                         delta['tool_calls'][0]['function']={'name':'inspect_image','arguments':json.dumps({'reference_id':owner.image_ref.reference_id})}
                     else:
-                        result_verdict=asdict(verdict(owner.task)); result_verdict['evidence_ids']=['1']
+                        result_verdict=answer(); result_verdict['evidence_ids']=['1']
                         if conflicting: result_verdict['risks']=['Whole bundle must be edited']
                         delta['tool_calls'].extend([
                             {'index':1,'id':'context-call','type':'function','function':{'name':'get_context','arguments':json.dumps({'anchor_id':'U001','mode':'history','reason':'check previous review'})}},
                             {'index':2,'id':'analysis-call','type':'function','function':{'name':'submit_analysis','arguments':json.dumps({'analysis':result_verdict})}}
                         ])
                 else:
-                    delta={'role':'assistant','content':json.dumps(asdict(verdict(owner.task)))}; finish='stop'
+                    delta={'role':'assistant','content':json.dumps(answer())}; finish='stop'
                 chunk={'id':'mock','object':'chat.completion.chunk','created':int(time.time()),'model':'mock-model','choices':[{'index':0,'delta':delta,'finish_reason':finish}]}
                 usage={**chunk,'choices':[],'usage':{'prompt_tokens':40,'completion_tokens':60,'total_tokens':100}}
                 raw=('data: '+json.dumps(chunk)+'\n\ndata: '+json.dumps(usage)+'\n\ndata: [DONE]\n\n').encode()
@@ -116,3 +118,28 @@ class HermesSdkTests(Workspace):
         self.assertEqual(result.decision,'needs_review'); self.assertIn('input_character_limit',result.reason)
         self.assertFalse(self.requests)
         self.assertFalse(list(self.settings.path('storage','worker_directory').glob('task-*')))
+
+    def test_independent_review_uses_real_worker_and_denies_context_and_preferences(self):
+        from pullshit.content import review
+        self.configure(review=True)
+        self.settings.data['review']['enabled']=True
+        with patch.dict(os.environ,{'PULLSHIT_AGENT_API_KEY':'test-only-token'}):
+            record=asyncio.run(review.run(self.task.bundle,['900201'],self.settings,
+                HermesExecutor(self.settings,self.store_instance)))
+        self.assertEqual(record['decision'],'eligible',record['reason'])
+        self.assertTrue(record['usage']['complete'])
+        denied=[json.loads(m['content']) for m in self.requests[-1]['messages'] if m['role']=='tool' and m['tool_call_id']!='analysis-call']
+        self.assertTrue(denied)
+        self.assertTrue(all('review_tool_denied' in json.dumps(m) for m in denied),denied)
+
+    def test_independent_review_reinspects_image_with_configured_policies(self):
+        from pullshit.content import review
+        self.configure(review=True,image=True)
+        self.settings.data['review']['enabled']=True
+        with patch.dict(os.environ,{'PULLSHIT_AGENT_API_KEY':'test-only-token','PULLSHIT_VISION_API_KEY':'test-vision-token'}):
+            record=asyncio.run(review.run(self.task.bundle,['900201'],self.settings,
+                HermesExecutor(self.settings,self.store_instance)))
+        self.assertEqual(record['decision'],'eligible',record['reason'])
+        self.assertEqual(record['inspected_images'],[self.image_ref.reference_id])
+        vision=next(r for r in self.requests if r['model']=='mock-vision')
+        self.assertIn('politics',json.dumps(vision,ensure_ascii=False))

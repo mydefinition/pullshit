@@ -77,6 +77,27 @@ SystemOne 候选在同一执行器内保持单并发，使用主程序 Python �
 
 纯文本决策模型通过现有 `vision_*` 通用 LLM 读取图片描述，并向父进程登记检查证据；视觉请求继续使用其独立密钥、单价及共享任务预算。文档中的 4096 token 服务上限由后端最终校验；字符上限用于前置限制，程序保留完整素材，超限返回复核。模型技术依据见[Agent 接入调研](reserach/agent-integration.md)，真实联调与任务状态见[开发 TODO](phase-1-todo.md)。
 
+## 独立发布审查
+
+review.enabled 默认为 true；启用时每份选中内容需先通过独立审查才可入队。review.minimum_score 默认为 0.8，表示放行结论的最低置信度。review.policies 为最多 20 项的替换列表，每项包含唯一的 ASCII id、enabled 及非空 instructions；启用审查时至少启用一条策略。默认 politics 策略拦截现实政治人物、政党、政权、政治事件／运动的宣传、争议、讽刺与影射，普通生活、技术或商业话题仅有国家或地名按普通内容判断，无法确认时暂缓。策略描述可按群运营要求修改。
+
+```json
+{
+  "review": {
+    "enabled": true,
+    "minimum_score": 0.8,
+    "policies": [
+      {"id": "politics", "enabled": true, "instructions": "拦截现实政治相关内容及影射；无法确认时暂缓发布。"}
+    ]
+  },
+  "agent": {"review": {"api_format": "llm"}}
+}
+```
+
+agent.review 使用与 feedback 相同的角色字段并限定 llm，默认继承顶层 LLM 模型、连接、时限和输入上限，支持独立覆盖；选材为 systemone 时，审查仍使用 llm。审查启动独立任务与会话，逐张重新检查待发图片。单任务费用及全局日费用沿用 agent 预算，原队列的额度在审查通过、实际发送前预留。review 开关、策略文本及最低置信门槛在入队与发送边界重新读取；旧候选缺少审查记录、策略变更或待发内容变化均阻止发送，记录保存于候选 JSON，六张业务表保持既有结构。审查禁用为显式配置行为；启用时故障与不确定结论均暂缓。
+
+独立审查适用于自动策展发布链路；反馈确认、管理员状态回复及操作员模拟接口按各自调用契约处理。离线回放需使用 review:<内容指纹> 或 review:* 显式提供审查结果，选材模拟结果单独提供。
+
 ## DeepSeek 官方 API
 
 核对日期：2026-10-17。[官方接口说明](https://api-docs.deepseek.com/)提供 OpenAI 兼容的 Chat Completions；配置 `provider=custom`、`model=deepseek-flash`、`base_url=https://api.deepseek.com`，密钥由 `PULLSHIT_AGENT_API_KEY` 注入。官方模型名 `deepseek-flash` 对应 DeepSeek V4.1 Flash，支持工具调用和[图片理解](https://api-docs.deepseek.com/guides/vision/)；视觉配置使用相同模型、入口和密钥环境变量。
@@ -121,5 +142,5 @@ worker 标识为 `pullshit/0.2`；固定 Hermes 版本发送主模型会话头�
 
 新库使用 `state.sqlite3`。程序只打开新 schema。具体设备的启动服务、路径、凭据和运维脚本存放在 Git 忽略的 `local/`。
 
-最后修改时间：2026-10-20T04:45:23Z
+最后修改时间：2026-10-20T07:30:38Z
 模型署名：GPT-6

@@ -475,6 +475,12 @@ class Store:
             self.db.execute('UPDATE candidates SET status=?, analysis=? WHERE bundle_id=?',
                             (status, canonical(analysis), bundle_id))
 
+    def record_review(self, bundle_id: str, record: dict) -> None:
+        """Attach an independent review without replacing the immutable publication."""
+        self.db.execute("UPDATE candidates SET body=json_set(body,'$.review',json(?)) "
+                        "WHERE bundle_id=? AND body IS NOT NULL AND status!='cancelled'",
+                        (canonical(record),bundle_id))
+
     def live_media_paths(self, now: float | None = None) -> set[str]:
         rows = self.db.execute(
             "SELECT media_paths FROM candidates WHERE body IS NOT NULL AND expires_at > ? AND status != 'cancelled'",
