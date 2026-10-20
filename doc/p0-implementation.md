@@ -194,6 +194,14 @@ Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/
 
 发行 SHA-256：`e51741dad5bb9b2fb0d1b4122c99d53e0766d4bdd58701c93944611bf95669ee`。测试、原消息隔离回放和部署证据分别为 Git 忽略的 `local/ops/pullshit/run/mention-feedback-release.json`、`local/ops/pullshit/run/mention-feedback-preflight.json`、`local/ops/pullshit/run/mention-feedback-deployment.json`；部署记录保留旧 wheel 与配置快照以供恢复。
 
+## 2026-10-19 OpenCode Go 通用 LLM 切换验证
+
+使用已保存的 OpenCode key 读取官方工作区配置，HTTP 200；模型 `deepseek-v4.1-flash` 声明支持工具、文字和图片。候选、反馈连接均配置为 llm，通过顶层继承 `https://opencode.ai/inference/go/openai/v1`、模型和密钥；视觉使用相同连接。角色时限与输入上限使用顶层默认值，预算按已有 0.30 / 1.20 USD 每百万输入／输出 token 保守计量。
+
+实际安装包通过真实 Hermes worker 在隔离数据库中执行三项合成素材预检：程序员段子 eligible、score=0.78、耗时 12.518 秒；纯红图片执行 inspect_image 后 rejected、耗时 37.606 秒；引用健身笑话并明确 @机器人表达喜欢，反馈 positive、耗时 51.117 秒。三个任务 usage 均完整，两份选材结果的发布清单校验均通过。预检没有连接 QQ 或创建发布投递；这些样本验证连接和执行行为，选材质量验证入口见[开发 TODO](phase-1-todo.md)。
+
+私有连接与 key 替换后，生产 ready 检查、QQ 账号、全部授权群及业务进程健康检查通过。应用源码与此前验证的发行包一致，本次采用真实连接预检与配置检查，没有重复运行完整业务套件。具体设备配置、备份、部署时间与进程证据保存在 Git 忽略的 `local/ops/pullshit/run/opencode-switch-preflight.json`、`opencode-switch-deployment.json`，运行设置见本机运维记录。
+
 ## 2026-10-20 多条聊天合并转发验证
 
 同一份选中内容内，连续多条普通源消息分别构造转发节点，每条保留源发送者、昵称、时间及其所选文字／图片顺序，使用 send_group_forward_msg 发布。单条普通源消息使用 send_group_msg；源合并转发卡片通过原消息转发保持完整。卡片分片优先保留消息边界，单条过长消息按片段顺序拆分，消息段额度按节点内内容累计；嵌套图片发送前继续核验有效期、大小与哈希。
@@ -202,5 +210,5 @@ Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/
 
 部署后生产 ready、依赖、QQ 账号、全部授权群、三个业务进程及模拟接口健康检查通过。私有模型连接、发送与预算配置逐字节保持一致。发行包 SHA-256 为 `2b9f61c6df94a4c997d83e940e258271556435746d91b33637df78487d6b551a`。具体部署时间、进程、配置快照与回滚 wheel 保存在 Git 忽略的 `local/ops/pullshit/run/merged-chat-deployment.json`；测试及实际投递重建证据分别为 `merged-chat-release.json`、`merged-chat-preflight.json`。群内自然投递回读验收统一见[开发 TODO](phase-1-todo.md)。
 
-最后修改时间：2026-10-20T04:45:49Z
+最后修改时间：2026-10-20T08:01:40Z
 模型署名：GPT-6

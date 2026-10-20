@@ -106,13 +106,17 @@ agent.review 使用与 feedback 相同的角色字段并限定 llm，默认继�
 
 ## OpenCode Go 与 DeepSeek V4.1 Flash
 
-核对日期：2026-10-12。[官方推理接口](https://opencode.ai/v2/docs/console/api/inference)使用 OpenAI Chat Completions；工作区 `GET /console/api/v2/config` 提供模型、入口和单价。[Go 文档](https://opencode.ai/v2/docs/console/go/)要求客户端标识和每次对话稳定的 `x-opencode-session`。
+核对日期：2026-10-19。[官方推理接口](https://opencode.ai/v2/docs/console/api/inference)提供 OpenAI Chat Completions；工作区 `GET /console/api/v2/config` 提供模型、入口和单价。[Go 文档](https://opencode.ai/v2/docs/console/go/)要求客户端标识和每次对话稳定的 `x-opencode-session`。
 
 配置 `provider=custom`、`model=deepseek-v4.1-flash`、`base_url=https://opencode.ai/inference/go/openai/v1`。密钥使用 `PULLSHIT_AGENT_API_KEY`。视觉配置可使用同一模型、入口和环境变量；文本与视觉费用分别配置。
+
+候选与反馈都使用该连接时，将两个角色配置分别设为 `{"api_format":"llm"}`，由顶层继承模型、入口、密钥、时限和输入上限。私有配置中的完整 `selection` 对象只保留通用 LLM 字段；`free` 取默认 false。视觉字段 `vision_model`、`vision_base_url` 和 `vision_api_key_env` 分别填写相同模型、入口及密钥环境变量。修改后执行 ready 配置检查并重启业务服务。
 
 worker 标识为 `pullshit/0.2`；固定 Hermes 版本发送主模型会话头，图片请求使用同一任务 ID。项目工具插件把父进程返回的对象编码为 Hermes 接受的 JSON 字符串。
 
 联调配置每日 1 USD、单任务 0.05 USD；每百万输入／输出 token 分别按 0.30 / 1.20 USD 峰值单价计量。缓存输入也按配置输入价计算，`usage.cost_usd` 为项目的保守费用估算；供应商实际账单与该估算分别核对。真实调用结果见[验证记录](p0-implementation.md#2026-10-12-opencode-go-真实模型验证)。
+
+2026-10-19 认证读取的 Go 模型配置声明支持文字、图片及工具，每百万输入／输出 token 为 0.15 / 0.60 USD、缓存读取为 0.003 USD。上述联调单价继续用作保守预算上限；实际调用与部署结果见[开发 TODO](phase-1-todo.md)。
 
 ## 内容、流量与保留期
 
@@ -142,5 +146,5 @@ worker 标识为 `pullshit/0.2`；固定 Hermes 版本发送主模型会话头�
 
 新库使用 `state.sqlite3`。程序只打开新 schema。具体设备的启动服务、路径、凭据和运维脚本存放在 Git 忽略的 `local/`。
 
-最后修改时间：2026-10-20T07:30:38Z
+最后修改时间：2026-10-20T08:01:40Z
 模型署名：GPT-6

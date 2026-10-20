@@ -60,6 +60,7 @@
 - [x] 2026-10-20T07:35:59.362152Z 独立审查已启用 politics 策略并部署。真实 OpenCode LLM 隔离预检：普通段子通过（13.377 秒）、涉政争论与政治动员拒绝（12.047 秒）、有效 128×128 图片独立检查后通过（31.681 秒），usage 均完整；另保留不可读图片暂缓且费用不完整的失败封闭证据。生产 ready、依赖、35 个模块、QQ 账号、6 个来源／2 个目标及三个托管进程检查通过，私有模型连接、授权、发送额度和自启保持原值，切换前无 queued、保留 sent=60／unknown=2。未额外向群发送测试消息。证据位于 Git 忽略的 local/ops/pullshit/run/content-review-{release,preflight,deployment}.json。
 
 - [x] 2026-10-20T04:45:16.616416Z 单条图文／多条聊天合并转发／整卡原样转发统一发行包已部署，生产 ready、依赖、34 个模块、QQ 账号、6 个来源／2 个目标及三个托管进程检查通过。原 OpenCode 模型连接、私有配置、自动发送及守护保持原值；切换前 queued=0，保留 sent=55、unknown=2，没有额外测试发送。证据为 Git 忽略的 `local/ops/pullshit/run/merged-chat-release.json`、`merged-chat-preflight.json`、`merged-chat-deployment.json`。
+- [x] 2026-10-19 生产候选、反馈及视觉连接统一使用 OpenCode Go 的 `deepseek-v4.1-flash`，候选／反馈均为 llm。已存 key 认证及真实 Hermes 隔离预检通过：文本选材 12.518 秒、纯红图检查并拒绝 37.606 秒、明确 @机器人喜好反馈 positive 51.117 秒，三项 usage 完整且选材校验通过。私有配置与 key 原子替换，ready、QQ 账号、6 个来源／2 个目标及三个托管进程检查通过；预算、授权、自动发送和反馈提及门槛保持原值。没有额外 QQ 测试发送；证据位于 Git 忽略的 `local/ops/pullshit/run/opencode-switch-preflight.json` 和 `opencode-switch-deployment.json`。
 - [x] 2026-10-18T11:38:54.703524Z @机器人反馈门槛版本已部署：33 个模块与已测试发行包及生产安装一致；业务、QQ 隧道、模拟接口均 RUNNING，账号、6 个来源与 2 个目标检查通过。候选／反馈模型、私有配置、自动发送及自启保持原值，未额外发送测试消息；已准备回滚 wheel。证据位于 Git 忽略的 `local/ops/pullshit/run/mention-feedback-release.json`、`mention-feedback-preflight.json`、`mention-feedback-deployment.json`。
 - [x] 2026-10-18T07:00:24.572454Z 按用户明确部署要求恢复生产：StartLux health 200，候选 systemone／9B、反馈 DeepSeek llm；开启自动发送及部署守护，业务／QQ 隧道／模拟接口三个进程均 RUNNING。QQ 账号、全部 6 个来源／2 个目标及 10 个广播组合检查通过，实际进程执行安装包 CLI；启动前 queued／sending 均为 0，保留 22 条 sent 与 2 条 unknown。启动后已接收 9 条自然消息，未额外发送测试消息；额度和 0.75 阈值保持原值。证据为 Git 忽略的 `local/ops/pullshit/run/systemone-deployment.json`。
 - [x] 2026-10-18T06:15:52.512063Z 用户提供专用 key 后完成 StartLux 9B 认证及真实候选联调；最终发行包的 6 组内容样本中，双段子观察只选第一份完整内容，其余 5 组进入复核，选材／发布清单校验均通过；超长输入另行在请求前拦截。文本耗时 3.037–5.905 秒，纯红图经 DeepSeek 视觉检查后复核，12.119 秒、视觉费用 0.0014373 USD；决策 API 零费用。已安装发行包并切换生产候选为 systemone，反馈保持 DeepSeek llm；密钥私有保存，发送／自启保持关闭，未连接 QQ。证据位于 Git 忽略的 `local/probes/decision-models/extended-real-results.json` 与 `local/ops/pullshit/run/systemone-stopped-installation.json`。
@@ -122,5 +123,5 @@
 - [ ] 验证真实反馈闭环及误归因：明确正负评价 → 正确内容归因 → 近期例子／权重变化 → 后续 task 实际采用 → 同一批候选的选材对照；分别验收即时例子、按日及按标签门槛、普通聊天排除，并明确题材／编排偏好与管理员发布规则的维护边界。
 - [ ] 经来源范围与预算约束接入主动搜罗，结果进入统一候选流程。
 
-最后修改时间：2026-10-20T07:36:46Z
+最后修改时间：2026-10-20T08:01:40Z
 模型署名：GPT-6
