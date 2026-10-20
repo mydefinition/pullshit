@@ -6,11 +6,24 @@ import json
 import secrets
 
 from pullshit.contracts import AgentResult, AgentTask, ContentBundle, MessageRef, digest
+from pullshit.content.forwards import component as forward_component
 
 
 def _atoms(bundle, trigger_refs):
     for message in bundle.messages:
         origin = bundle.origins.get(message.ref.key, message.ref.key)
+        if origin != message.ref.key and origin in bundle.forwards:
+            continue
+        forward = bundle.forwards.get(message.ref.key)
+        if forward is not None:
+            yield {'key': digest([message.ref.key, -1]), 'message_key': message.ref.key,
+                   'origin_key': origin, 'segment_index': -1, 'kind': 'forward',
+                   'occurred_at': message.occurred_at, 'sender': message.nickname or message.user_id,
+                   'new': origin in trigger_refs,
+                   'publishable': not message.own and not message.recalled and not forward['issues'],
+                   'content': ['forward', forward['content']], 'component': forward_component(forward),
+                   'media_id': None, 'media_ids': forward['media_ids'], 'issues': forward['issues']}
+            continue
         for index, segment in enumerate(message.segments):
             kind = segment.get('type')
             data = segment.get('data', {})
@@ -18,6 +31,7 @@ def _atoms(bundle, trigger_refs):
                 data={'text':str(data)}
             media = next((m for m in bundle.media if m.source == message.ref and m.path == data.get('file')), None) if kind == 'image' else None
             publishable = (kind in {'text', 'image'} and not message.own and not message.recalled
+                           and not message.ref.message_id.startswith('embedded:')
                            and (bool(str(data.get('text', '')).strip()) if kind == 'text' else bool(media and media.sha256 and media.path)))
             content = (['image', media.sha256] if media else
                        ['text', str(data.get('text', ''))] if kind == 'text' else [kind, data])
@@ -27,6 +41,7 @@ def _atoms(bundle, trigger_refs):
                    'new': origin in trigger_refs, 'publishable': publishable,
                    'content': content, 'component': digest(content),
                    'media_id': media.reference_id if media else None,
+                   'media_ids': [media.reference_id] if media else [],
                    'issues': (['media_unavailable'] if kind == 'image' and not media else
                               ['unsupported_cq'] if kind=='text' and '[CQ:' in str(data.get('text','')) else [])}
 
@@ -35,6 +50,9 @@ def prepare(task: AgentTask, store=None, context_limits=None):
     if task.kind != 'selection' or task.selection:
         return
     bundle = task.bundle
+    if not bundle.forwards:
+        from pullshit.content.forwards import collect
+        collect(bundle)
     triggers = bundle.trigger_refs or [ref.key for ref in bundle.sources]
     task.selection = {'snapshot_id': digest([task.task_id, bundle.bundle_id, triggers, secrets.token_hex(8)]),
                       'revision': 0, 'units': [], 'expansion_calls': 0,
@@ -55,7 +73,7 @@ def view(task, units=None):
             'context_budget': {key: snapshot['context_limits'][key] - snapshot.get(key,0)
                                for key in ('expansion_calls','expansion_units','expansion_characters','expansion_images')},
             'units': [{key: unit[key] for key in ('id', 'message_key', 'origin_key', 'segment_index',
-                       'kind', 'occurred_at', 'sender', 'new', 'publishable', 'content', 'media_id', 'issues', 'history')}
+                       'kind', 'occurred_at', 'sender', 'new', 'publishable', 'content', 'media_id', 'media_ids', 'issues', 'history')}
                       for unit in rows], 'context_issues': snapshot['issues']}
 
 
@@ -90,7 +108,7 @@ def validate(task, result: AgentResult, inspected=None):
             return 'historical_content_only'
         if any(not unit['new'] for unit in units) and not selection.get('new_value_reason','').strip():
             return 'missing_new_value_reason'
-        if inspected is not None and any(unit['media_id'] and unit['media_id'] not in inspected for unit in units):
+        if inspected is not None and any(media not in inspected for unit in units for media in unit['media_ids']):
             return 'selected_image_not_inspected'
     return None
 
@@ -108,15 +126,18 @@ def publications(task, result):
         messages = []
         for message in sorted(task.bundle.messages, key=lambda m: m.occurred_at):
             segments = [copy.deepcopy(segment) for index, segment in enumerate(message.segments)
-                        if (message.ref.key, index) in positions]
+                        if (message.ref.key, index) in positions or (message.ref.key, -1) in positions]
             if segments:
                 item = copy.deepcopy(message)
                 item.segments = segments
                 messages.append(item)
-        media_ids = {unit['media_id'] for unit in units if unit['media_id']}
+        media_ids = {identity for unit in units for identity in unit['media_ids']}
         media = [copy.deepcopy(m) for m in task.bundle.media if m.reference_id in media_ids]
         contents = []
         for message in messages:
+            if message.ref.key in task.bundle.forwards:
+                contents.append(['forward', task.bundle.forwards[message.ref.key]['content']])
+                continue
             for index, segment in enumerate(message.segments):
                 if segment['type'] == 'text':
                     contents.append(['text', segment['data']['text']])
@@ -130,6 +151,7 @@ def publications(task, result):
                     'unit_keys': [unit['key'] for unit in units],
                     'components': [unit['component'] for unit in units],
                     'image_components': [unit['component'] for unit in units if unit['kind'] == 'image'],
+                    'forward_components': [unit['component'] for unit in units if unit['kind'] == 'forward'],
                     'context_status': selection['context_status'],
                     'completeness_reason': selection['completeness_reason'],
                     'new_value_reason': selection.get('new_value_reason',''),
@@ -139,7 +161,9 @@ def publications(task, result):
         bundle = ContentBundle(digest(['publication', fingerprint, sorted(unit['key'] for unit in units)]),
                                fingerprint, messages, task.bundle.created_at,
                                min(task.bundle.expires_at, *(m.expires_at for m in media)) if media else task.bundle.expires_at,
-                               media=media, origins=origins, publication=manifest)
+                               media=media, origins=origins, publication=manifest,
+                               forwards={m.ref.key: copy.deepcopy(task.bundle.forwards[m.ref.key]) for m in messages
+                                         if m.ref.key in task.bundle.forwards})
         analysis = AgentResult('eligible', selection.get('score', result.score),
                                selection.get('tags', result.tags), reason=selection['reason'],
                                usage=result.usage, inspected_images=[m.reference_id for m in media])
@@ -203,7 +227,7 @@ async def expand(task, arguments, settings, store, content, now):
     for index, atom in enumerate(additions):
         atom['id'] = f'U{len(units)+index+1:03d}'
         atom['history'] = store.unit_history(atom['key'])
-    images = sum(atom['kind'] == 'image' for atom in additions)
+    images = sum(max(int(atom['kind'] == 'image'), len(atom['media_ids'])) for atom in additions)
     probe=copy.copy(task)
     probe.selection={**snapshot,'revision':snapshot['revision']+bool(additions)}
     result=view(probe,additions)
@@ -226,6 +250,7 @@ async def expand(task, arguments, settings, store, content, now):
     known_media = {m.reference_id for m in task.bundle.media}
     task.bundle.media.extend(m for m in extra.media if m.reference_id not in known_media)
     task.bundle.origins.update(extra.origins)
+    task.bundle.forwards.update(extra.forwards)
     task.bundle.expires_at = min(task.bundle.expires_at, extra.expires_at)
     result['context_budget']=view(task,[])['context_budget']
     return result

@@ -132,8 +132,11 @@ class Selector:
             content = unit['content']
             if unit['media_id']:
                 content = ['image_description', self.inspected.get(unit['media_id'], '图片不可读取')]
+            elif unit['kind'] == 'forward':
+                content = ['whole_forward', unit['content'],
+                           {identity: self.inspected.get(identity, '图片不可读取') for identity in unit['media_ids']}]
             rows.append({'id': unit['id'], 'message': unit['message_key'], 'sender': unit['sender'],
-                         'new': unit['new'], 'publishable': unit['publishable'] and not unit['issues'] and unit['media_id'] not in self.unavailable,
+                         'new': unit['new'], 'publishable': unit['publishable'] and not unit['issues'] and not self.unavailable.intersection(unit['media_ids']),
                          'content': content, 'history': unit['history']})
         replies = {m.ref.key: [str(s.get('data', {}).get('id')) for s in m.segments if s.get('type') == 'reply']
                    for m in task.bundle.messages if any(s.get('type') == 'reply' for s in m.segments)}
@@ -142,17 +145,17 @@ class Selector:
 
     def inspect(self):
         for unit in self.task.selection['units']:
-            media = unit['media_id']
-            if not unit['publishable'] or not media or media in self.inspected or media in self.unavailable:
-                continue
-            try:
-                result = self.bridge.tool_call('inspect_image', {'reference_id': media})
-                if not result.get('ok') or not result.get('description'):
-                    raise ToolDenied('vision_unavailable')
-                self.inspected[media] = result['description']
-            except ToolDenied:
-                self.unavailable.add(media)
-                self.pending = True
+            for media in unit['media_ids']:
+                if not unit['publishable'] or media in self.inspected or media in self.unavailable:
+                    continue
+                try:
+                    result = self.bridge.tool_call('inspect_image', {'reference_id': media})
+                    if not result.get('ok') or not result.get('description'):
+                        raise ToolDenied('vision_unavailable')
+                    self.inspected[media] = result['description']
+                except ToolDenied:
+                    self.unavailable.add(media)
+                    self.pending = True
 
     def group(self):
         if len(self.task.selection['units']) > self.options.get('max_units', 16):

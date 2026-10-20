@@ -517,7 +517,7 @@ class HermesExecutor:
         if not wanted:
             return None
         for media in task.bundle.media:
-            if task.selection and media.reference_id not in {unit['media_id'] for unit in task.selection['units']}:
+            if task.selection and media.reference_id not in {identity for unit in task.selection['units'] for identity in unit['media_ids']}:
                 continue
             if wanted in (media.reference_id, media.path):
                 return media

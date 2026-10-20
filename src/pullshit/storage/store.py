@@ -380,7 +380,8 @@ class Store:
     def seen_publication(self, account, group, bundle, now=None):
         """Suppress a repeated image core, or a fully covered text selection, per recipient."""
         manifest = bundle.publication
-        wanted = set(manifest.get('image_components') or manifest.get('components', []))
+        wanted = set((manifest.get('image_components', []) + manifest.get('forward_components', []))
+                     or manifest.get('components', []))
         if not wanted:
             return False
         scope=(account,group,self._now(now),bundle.fingerprint)

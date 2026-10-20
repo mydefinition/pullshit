@@ -9,7 +9,7 @@
 | MessageRef | account_id、group_id、message_id；字符串 ID，消息 ID 可为负 |
 | ChatMessage | ref、user_id、nickname、occurred_at、segments、own、recalled、expires_at |
 | ChatEvent | kind=message/recall/reaction、ref、event_id、occurred_at、user_id 及对应消息／表情字段 |
-| ContentBundle | bundle_id、fingerprint、messages、media、issues、trigger_refs、origins、publication、created_at、expires_at |
+| ContentBundle | bundle_id、fingerprint、messages、media、issues、trigger_refs、origins、publication、forwards、created_at、expires_at |
 | MediaRef | reference_id、source、path、sha256、size、mime、expires_at |
 | AgentTask | task_id、kind=selection/feedback、target_group_id、target_group_ids、deadline、bundle、preferences、feedback、limits、selection |
 | AgentResult | decision、score、tags、risks、evidence_ids、reason、usage、inspected_images、direction、selections、snapshot_id、snapshot_revision |
@@ -29,7 +29,8 @@
 | fetch_forward(ref, forward_id) | 返回转发节点，权限由外层消息限定 |
 | reply(ref, text, before_send=None) | 绑定真实事件账号与授权群，复查账号及回调，以普通引用消息回复 |
 | send_message(group_id, segments, before_send=None) | 复查登录账号后执行同步检查回调，使用普通群消息发送文本／图片，返回消息 ID |
-| send_forward(group_id, nodes, before_send=None) | 操作员模拟接口使用，复查登录账号后执行同步检查回调，再发送 1–100 个节点并返回消息 ID |
+| forward_message(ref, group_id, before_send=None) | 对授权源群的原合并转发回取校验，执行账号与发布回调检查，再调用 forward_group_single_msg；返回新消息 ID，缺失回执为未知 |
+| send_forward(group_id, nodes, before_send=None) | 多条源消息的策展发布及操作员模拟接口使用，复查登录账号后执行同步检查回调，再发送 1–100 个节点并返回消息 ID |
 | ContentService.build(refs) | 返回内容包；保留缺失和截断原因 |
 | ContentWindow.add(message) / due(now, force=False) | 按账号与群收集对话并返回到期消息引用 |
 | content.selection.prepare / view / validate / publications | 分配原子编号、生成模型视图、校验选择、组装独立发布内容 |
@@ -57,7 +58,7 @@
 - 控制：group_state/set_group_state/paused/set_paused。CLI 通配范围支持环境、账号及目标群控制。
 - 预算：reserve_budget(day, scope, metric, amount, limit) 返回布尔值；settle_budget(day, scope, metric, reserved, actual) 结算预留金额。budget/budget_summary 返回汇总。预算检查、状态领取和发送额度预留在事务中完成。
 
-发送队列状态为 queued/sending/sent/failed/unknown/cancelled。批次在全部分片建立后可执行；前片未成功时，后片保持排队。unknown 保留人工核对入口。成功回执可以在正文清除后作为精简索引保留。每个目标群独立保留普通消息回执，引用任意已发分片均可关联到相同内容包。存储字段 `nodes` 保存普通消息段，`node_count` 及日额度指标 `nodes` 计量消息段数。
+发送队列状态为 queued/sending/sent/failed/unknown/cancelled。批次在全部分片建立后可执行；前片未成功时，后片保持排队。unknown 保留人工核对入口。成功回执可以在正文清除后作为精简索引保留。每个目标群独立保留发布回执，引用任意已发分片均可关联到相同内容包。存储字段 `nodes` 保存普通消息段、合并转发 node 列表或单个 forward_original 原消息引用。单条普通源消息直接发送，连续多条源消息以 node 保留每条的 user_id、nickname、time 和所选 content；已有合并转发卡片独占一条原消息投递。`node_count` 及日额度指标 `nodes` 对构造的合并转发计量节点内文本／图片消息段总数，对原样转发卡片计一段。每分片最多 100 个内容消息段及 100 个节点，媒体额度按实际图片累计；优先按原消息边界分片，单条过长消息按片段拆分并保留发送者与时间。发送前逐张校验缓存图片并转为 base64，队列身份、节点正文及发送者信息均与发布清单重新组装的结果核对。
 
 ## Hermes worker 协议
 
@@ -69,7 +70,7 @@
 
 父进程工具协议返回对象，Hermes 插件处理器返回编码后的 JSON 字符串。submit_analysis 在确认 accepted 前检查结果结构、证据范围和 eligible 分数。选材 get_context 要求已有 anchor_id、mode=reply/nearby/history 与缺失信息 reason；新增内容返回保持稳定的局部编号及快照版本。相邻上下文读取本地消息，引用回取由内容服务执行。扩展参数见配置说明，预算不足返回明确错误并保持原编号；重复取得的单元不重复返回正文。反馈任务保持其绑定原消息的读取语义。
 
-发布器要求 publication.version=1 的明确清单，复查清单内容指纹与已持久化分片载荷的一致性；观察包只供判断，独立发布候选只含选中的原始文字和图片。
+发布器要求 publication.version=1 的明确清单，复查清单内容指纹与已持久化分片载荷的一致性；观察包只供判断，独立发布候选含选中的原始文字、图片及整张合并转发卡片。`forwards` 按外层 MessageRef.key 保存整卡 content、media_ids、issues 和 segments_digest；选择快照中每张卡片仅一个 kind=forward 单元，segment_index=-1 表示完整外层消息，media_ids 列出须逐张检查的全部图片。嵌入节点不给独立发布编号。publication.forward_components 保存整卡内容摘要，图片身份及外层片段清单与候选和队列复查一致。
 
 日志只保留诊断字段，正文和工具载荷不进入应用日志。最终 AgentResult 同时满足 schema 和业务证据校验才进入发布判断。
 
@@ -172,5 +173,5 @@ curl --fail-with-body -sS http://127.0.0.1:18700/v1/simulation-forwards \
 
 引用正文、合并转发节点、OCR 和模型输入中的命令保持为素材。管理员命令通过真实事件的发送者校验；普通成员可以提供偏好反馈，硬规则由管理员配置。
 
-最后修改时间：2026-10-18T11:33:54Z
+最后修改时间：2026-10-20T04:42:48Z
 模型署名：GPT-6

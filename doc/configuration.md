@@ -105,7 +105,7 @@ worker 标识为 `pullshit/0.2`；固定 Hermes 版本发送主模型会话头�
 | context.nearby_seconds | 相邻上下文前后各 600 秒；明确引用受期限及总预算约束 |
 | limits.max_message_segments | 100，应用配置上限 100 |
 | limits.min_interval_seconds | 每目标群 600 秒 |
-| limits.daily_batches / daily_segments | 每账号／目标群 20 条普通消息 / 500 个消息段 |
+| limits.daily_batches / daily_segments | 每账号／目标群 20 条发布消息 / 500 个内容消息段 |
 | limits.daily_download_bytes / daily_publish_bytes | 全局各 1 GiB |
 | media.max_image_bytes / limits.max_batch_media_bytes | 10 / 20 MiB |
 | media.cache_max_bytes | 2 GiB |
@@ -117,9 +117,9 @@ worker 标识为 `pullshit/0.2`；固定 Hermes 版本发送主模型会话头�
 
 自然语言引用反馈在来源及目标授权范围内受理。确认回复每群每分钟最多 5 次，受 auto 模式和发送开关控制；持久发布暂停独立于反馈受理及确认。近期正负反馈每群最多 6 例提供给选材任务，权重汇总继续遵守表中的最少内容数及成员数。
 
-日额度按 UTC 日期分桶。普通消息发送尝试占用消息条数、消息段数及发布额度；失败或回执不确定同样占用。每个广播目标独立计算间隔和日条数／段数额度，分片逐条执行；下载和发布字节使用全局额度。
+日额度按 UTC 日期分桶。发送尝试占用消息条数、消息段数及发布额度；构造的聊天合并转发按节点内文本／图片消息段累计，原样转发卡片按一段计量；失败或回执不确定同样占用。每个广播目标独立计算间隔和日条数／段数额度，分片逐条执行；下载和发布字节使用全局额度。
 
 新库使用 `state.sqlite3`。程序只打开新 schema。具体设备的启动服务、路径、凭据和运维脚本存放在 Git 忽略的 `local/`。
 
-最后修改时间：2026-10-18T06:17:10Z
+最后修改时间：2026-10-20T04:45:23Z
 模型署名：GPT-6

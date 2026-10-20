@@ -237,6 +237,40 @@ class FakeNapCat:
 
 
 class GatewayTests(unittest.IsolatedAsyncioTestCase):
+    async def test_forward_original_uses_native_api_without_constructing_nodes(self):
+        self.napcat.actions['get_msg'] = lambda request: {'status': 'ok', 'retcode': 0, 'data':
+            message_payload(group_id=900101, message_id=-123,
+                            segments=[{'type': 'forward', 'data': {'id': 'original-resource'}}])}
+        self.napcat.actions['forward_group_single_msg'] = lambda request: {
+            'status': 'ok', 'retcode': 0, 'data': {'message_id': -456}}
+        await self.gateway.__aenter__()
+        checks = []
+        result = await self.gateway.forward_message(MessageRef('900001', '900101', '-123'), '900201',
+                                                     before_send=lambda: checks.append(True))
+        self.assertEqual(result, '-456')
+        self.assertEqual(checks, [True])
+        sends = [r for r in self.napcat.received if r['action'].startswith(('send_', 'forward_'))]
+        self.assertEqual([(r['action'], r['params']) for r in sends],
+                         [('forward_group_single_msg', {'group_id': '900201', 'message_id': -123})])
+
+    async def test_native_forward_rejects_unavailable_or_misidentified_source(self):
+        self.napcat.actions['get_msg'] = lambda request: {'status': 'ok', 'retcode': 0, 'data':
+            message_payload(group_id=900102, message_id=123,
+                            segments=[{'type': 'forward', 'data': {'id': 'resource'}}])}
+        await self.gateway.__aenter__()
+        with self.assertRaises(PlatformRejected):
+            await self.gateway.forward_message(MessageRef('900001', '900101', '123'), '900201')
+        self.assertFalse(any(r['action']=='forward_group_single_msg' for r in self.napcat.received))
+
+    async def test_native_forward_with_missing_receipt_is_unknown(self):
+        self.napcat.actions['get_msg'] = lambda request: {'status': 'ok', 'retcode': 0, 'data':
+            message_payload(group_id=900101, message_id=123,
+                            segments=[{'type': 'forward', 'data': {'id': 'resource'}}])}
+        self.napcat.actions['forward_group_single_msg'] = lambda request: {'status': 'ok', 'retcode': 0, 'data': None}
+        await self.gateway.__aenter__()
+        with self.assertRaises(OutcomeUnknown):
+            await self.gateway.forward_message(MessageRef('900001', '900101', '123'), '900201')
+
     async def asyncSetUp(self):
         self.token_env = os.environ.get('PULLSHIT_NAPCAT_ACCESS_TOKEN')
         os.environ['PULLSHIT_NAPCAT_ACCESS_TOKEN'] = 'test-token'

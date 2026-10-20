@@ -2,6 +2,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from pullshit.config import load_settings
 from pullshit.contracts import AgentResult,AgentTask,ChatMessage,ContentBundle,DAY,MessageRef,digest
@@ -15,7 +16,7 @@ class Workspace(unittest.TestCase):
         self.local={'authorization':{'source_group_ids':['900101'],'target_group_ids':['900201','900202'],
                                     'operator_qq_ids':['900301']},
                     'sending':{'enabled':True}}
-        self.write_config(); self.settings=load_settings(self.root,'development').with_account('900001'); self.current=1791810000.0
+        self.write_config(); self.settings=load_settings(self.root,'development').with_account('900001'); self.current=time.time()
     def write_config(self):
         (self.root/'config/local/development.json').write_text(json.dumps(self.local))
     def bundle(self,count=1):
@@ -38,6 +39,8 @@ class Gateway:
         if before_send is not None: before_send()
         if self.error: raise self.error
         self.sent.append((group_id,nodes)); return str(1000+len(self.sent))
+    async def send_forward(self,group_id,nodes,*,before_send=None):
+        return await self.send_message(group_id,nodes,before_send=before_send)
 
 
 def verdict(task, ids=None, **kwargs):

@@ -76,6 +76,8 @@ class ContentService:
         bundle = self._bundle(state, started)
         bundle.trigger_refs = list(dict.fromkeys(ref.key for ref in refs))
         bundle.origins = state.origins
+        from pullshit.content.forwards import collect
+        collect(bundle)
         return bundle
 
     async def _resolve(self, ref: MessageRef, reply_level: int, state: _BuildState, path=()) -> ChatMessage | None:
@@ -193,6 +195,7 @@ class ContentService:
                        level: int, state: _BuildState) -> None:
         for index, node in enumerate(nodes):
             if not isinstance(node, dict):
+                state.issues.append('invalid_forward_node')
                 continue
             if state.nodes >= state.max_nodes:
                 if not state.node_limit_issued:
@@ -227,15 +230,18 @@ class ContentService:
     def _node_segments(self, node_ref: MessageRef, occurred: float, content, path: list[int], prefix: str,
                        branch: set[str], level: int, state: _BuildState) -> list[dict]:
         if content is None:
+            state.issues.append(f'missing_forward_content:{node_ref.key}')
             return []
         if isinstance(content, str):
             state.issues.append(f'cq_string:{node_ref.key}')
             return [{'type': 'text', 'data': {'text': content}}]
         if not isinstance(content, list):
+            state.issues.append(f'invalid_forward_content:{node_ref.key}')
             return []
         result = []
         for index, item in enumerate(content):
             if not isinstance(item, dict) or not isinstance(item.get('type'), str):
+                state.issues.append(f'invalid_forward_segment:{node_ref.key}')
                 continue
             item_data = item.get('data') if isinstance(item.get('data'), dict) else {}
             if item['type'] == 'node':
@@ -251,6 +257,7 @@ class ContentService:
                 claimed_id = item_data.get('id')
                 inline = item_data.get('content')
                 if not isinstance(claimed_id, str) or not claimed_id:
+                    state.issues.append(f'missing_forward_id:{node_ref.key}')
                     continue
                 if claimed_id in branch:
                     state.issues.append(f'forward_cycle:{node_ref.key}')

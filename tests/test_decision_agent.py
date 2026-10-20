@@ -175,6 +175,29 @@ class DecisionAgentTests(Workspace):
         self.assertGreater(result.usage['cost_usd'], 0)
         self.assertTrue(result.usage['complete'])
 
+    def test_whole_forward_inspects_all_images_and_keeps_one_selection_id(self):
+        import hashlib
+        task = self.task(['整卡'])
+        outer = task.bundle.messages[0]
+        outer.segments = [{'type': 'forward', 'data': {'id': 'resource'}}]
+        for i in range(2):
+            ref = MessageRef('900001', '900101', 'embedded:'+digest(i))
+            path = self.root / ('inside'+str(i)+'.png'); path.write_bytes(('image'+str(i)).encode())
+            task.bundle.messages.append(ChatMessage(ref, '900402', '卡片作者', outer.occurred_at,
+                [{'type': 'image', 'data': {'file': str(path)}}]))
+            task.bundle.origins[ref.key] = outer.ref.key
+            task.bundle.media.append(MediaRef('inside'+str(i), ref, str(path),
+                hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_size, 'image/png', time.time()+1000))
+        self.settings.data['agent'].update(vision_model='vision-llm', vision_base_url=self.base,
+            vision_api_key_env='TEST_LLM_KEY', vision_input_usd_per_million=.3, vision_output_usd_per_million=1.2)
+        result = self.execute(task)
+        self.assertEqual(result.decision, 'eligible', result.reason)
+        self.assertEqual(result.inspected_images, ['inside0', 'inside1'])
+        self.assertEqual(len(task.selection['units']), 1)
+        self.assertEqual(result.selections[0]['publish_ids'], ['U001'])
+        self.assertEqual(len(selection.publications(task, result)[0][0].messages), 1)
+        self.assertEqual(sum(request[0]=='/chat/completions' for request in self.requests), 2)
+
     def test_reply_expansion_keeps_authoritative_snapshot(self):
         task = self.task(['后半段包袱'])
         task.bundle.messages[0].segments.insert(0, {'type': 'reply', 'data': {'id': '99'}})

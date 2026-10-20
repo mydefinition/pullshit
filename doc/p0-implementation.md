@@ -194,5 +194,13 @@ Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/
 
 发行 SHA-256：`e51741dad5bb9b2fb0d1b4122c99d53e0766d4bdd58701c93944611bf95669ee`。测试、原消息隔离回放和部署证据分别为 Git 忽略的 `local/ops/pullshit/run/mention-feedback-release.json`、`local/ops/pullshit/run/mention-feedback-preflight.json`、`local/ops/pullshit/run/mention-feedback-deployment.json`；部署记录保留旧 wheel 与配置快照以供恢复。
 
-最后修改时间：2026-10-18T11:39:58Z
+## 2026-10-20 多条聊天合并转发验证
+
+同一份选中内容内，连续多条普通源消息分别构造转发节点，每条保留源发送者、昵称、时间及其所选文字／图片顺序，使用 send_group_forward_msg 发布。单条普通源消息使用 send_group_msg；源合并转发卡片通过原消息转发保持完整。卡片分片优先保留消息边界，单条过长消息按片段顺序拆分，消息段额度按节点内内容累计；嵌套图片发送前继续核验有效期、大小与哈希。
+
+发布、整卡、运行、回放与选材相关 55 项检查通过。最终独立安装包的完整 230 项测试通过（103.750 秒），34 个模块与源码及生产安装逐字节一致；新增用例核对不同发送者的图文节点、真实合并发送入口、每节点内部顺序、分片与媒体限制、发送者篡改拦截及缓存图片变动阻断。最近两条实际投递的只读重建分别得到 3 个和 7 个节点，文字与 2 张图片按原顺序匹配，图片载荷可转换；重建没有连接 QQ、调用模型或重新发送历史内容。
+
+部署后生产 ready、依赖、QQ 账号、全部授权群、三个业务进程及模拟接口健康检查通过。私有模型连接、发送与预算配置逐字节保持一致。发行包 SHA-256 为 `2b9f61c6df94a4c997d83e940e258271556435746d91b33637df78487d6b551a`。具体部署时间、进程、配置快照与回滚 wheel 保存在 Git 忽略的 `local/ops/pullshit/run/merged-chat-deployment.json`；测试及实际投递重建证据分别为 `merged-chat-release.json`、`merged-chat-preflight.json`。群内自然投递回读验收统一见[开发 TODO](phase-1-todo.md)。
+
+最后修改时间：2026-10-20T04:45:49Z
 模型署名：GPT-6

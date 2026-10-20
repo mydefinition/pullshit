@@ -46,7 +46,8 @@ class SelectionTests(Workspace):
         ids=[unit['id'] for unit in task.selection['units'] if unit['media_id'] in {first.reference_id,last.reference_id}]
         result=verdict(task,ids,inspected_images=[first.reference_id,last.reference_id])
         store,gateway,bundles=self.publish(task,result)
-        self.assertEqual([s['type'] for s in gateway.sent[0][1]],['image','image'])
+        self.assertEqual([n['type'] for n in gateway.sent[0][1]],['node','node'])
+        self.assertEqual([s['type'] for n in gateway.sent[0][1] for s in n['data']['content']],['image','image'])
         self.assertEqual([m.reference_id for m in bundles[0][0].media],[first.reference_id,last.reference_id])
         self.assertNotIn('900301',json.dumps(gateway.sent))
 
@@ -129,12 +130,14 @@ class SelectionTests(Workspace):
         asyncio.run(publisher.dispatch_once())
         self.assertEqual(store.get_delivery(ids[0])['status'],'cancelled');self.assertFalse(gateway.sent)
 
-    def test_embedded_selection_keeps_verified_outer_origin_and_recall_guard(self):
+    def test_whole_forward_keeps_verified_outer_origin_and_recall_guard(self):
         store=self.store();outer=self.bundle().messages[0]
         outer.segments=[{'type':'node','data':{'user_id':'900401','content':[{'type':'text','data':{'text':'self contained embedded text'}}]}}]
         store.put_message(outer)
         bundle=asyncio.run(ContentService(self.settings,store,clock=lambda:self.current).build(outer.ref))
-        task=self.task(bundle);selected,analysis=selection.publications(task,verdict(task,['U002']))[0]
+        task=self.task(bundle);self.assertEqual(len(task.selection['units']),1)
+        self.assertEqual(selection.validate(task,verdict(task,['U002'])),'publish_id_out_of_scope')
+        selected,analysis=selection.publications(task,verdict(task,['U001']))[0]
         self.assertEqual(selected.sources,[outer.ref])
         store.put_candidate(selected,{'900201':asdict(analysis)});store.recall_message(outer.ref,now=self.current)
         with self.assertRaisesRegex(PublishRejected,'source_recalled'):

@@ -226,6 +226,28 @@ class NapCatGateway:
         except ValueError:
             raise OutcomeUnknown('invalid send ack') from None
 
+    async def forward_message(self, ref: MessageRef, group_id: str, *, before_send=None) -> str:
+        """Copy an existing merged-forward message without rebuilding its nodes."""
+        group_id = platform_id(str(group_id))
+        if ref.account_id != self.account_id or not self.settings.permits(ref.group_id, group_id):
+            raise PlatformRejected('forward not authorized')
+        message = await self.fetch_message(ref)
+        if (message is None or message.own or message.recalled
+                or not any(s.get('type') in {'forward', 'node'} for s in message.segments)
+                or any(s.get('type') not in {'forward', 'node', 'text', 'image'} for s in message.segments)):
+            raise PlatformRejected('forward source unavailable')
+        await self._verify_account()
+        if before_send is not None:
+            before_send()
+        data = await self._call('forward_group_single_msg',
+                                {'group_id': group_id, 'message_id': int(ref.message_id)})
+        if not isinstance(data, dict) or data.get('message_id') is None:
+            raise OutcomeUnknown('invalid forward ack')
+        try:
+            return platform_id(str(data['message_id']), signed=True)
+        except ValueError:
+            raise OutcomeUnknown('invalid forward ack') from None
+
     async def _verify_account(self):
         login=await self._call('get_login_info',{})
         if platform_id(login.get('user_id'))!=self.account_id:

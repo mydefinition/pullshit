@@ -1,4 +1,4 @@
-"""Publish complete content bundles using bounded durable ordinary-message jobs."""
+"""Publish complete content with durable message and merged-forward jobs."""
 from __future__ import annotations
 import base64
 import copy
@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 import time
 from pullshit.contracts import AgentResult, ContentBundle, OutcomeUnknown, PlatformRejected, canonical, digest
+from pullshit.content.forwards import component as forward_component
 
 class PublishRejected(ValueError):
     pass
@@ -28,6 +29,8 @@ class Publisher:
         if any(not settings.permits(ref.group_id,target) or (settings.account_id and ref.account_id != settings.account_id) for ref in bundle.sources):
             raise PublishRejected('broadcast_not_authorized')
         if any(m.own or m.recalled for m in bundle.messages): raise PublishRejected('own_or_recalled')
+        if any(m.ref.message_id.startswith('embedded:') for m in bundle.messages):
+            raise PublishRejected('forward_atom_required')
         for ref in bundle.sources:
             current=self.store.get_message(ref,now=self.clock())
             if current and current.recalled: raise PublishRejected('source_recalled')
@@ -36,8 +39,17 @@ class Publisher:
         if analysis.decision != 'eligible' or analysis.risks: raise PublishRejected('analysis_not_eligible')
         if analysis.score < settings.data['agent']['minimum_score']: raise PublishRejected('score_too_low')
         if any(media.reference_id not in analysis.inspected_images for media in bundle.media): raise PublishRejected('image_not_inspected')
-        components=[]; images=[]
+        components=[]; images=[]; forwards=[]
         for message in bundle.messages:
+            if message.ref.key in bundle.forwards:
+                forward=bundle.forwards[message.ref.key]
+                if (forward['issues'] or digest(message.segments)!=forward['segments_digest']
+                        or not any(s.get('type') in {'forward','node'} for s in message.segments)
+                        or any(s.get('type') not in {'forward','node','text','image'} for s in message.segments)
+                        or any(identity not in {m.reference_id for m in bundle.media} for identity in forward['media_ids'])):
+                    raise PublishRejected('forward_manifest_mismatch')
+                component=forward_component(forward); components.append(component); forwards.append(component)
+                continue
             for segment in message.segments:
                 if segment.get('type')=='text':
                     components.append(digest(['text',segment.get('data',{}).get('text','')]))
@@ -46,7 +58,8 @@ class Publisher:
                     if media is None: raise PublishRejected('media_unavailable')
                     component=digest(['image',media.sha256]);components.append(component);images.append(component)
                 else: raise PublishRejected('unselected_segment')
-        if sorted(components)!=sorted(manifest.get('components',[])) or sorted(images)!=sorted(manifest.get('image_components',[])):
+        if (sorted(components)!=sorted(manifest.get('components',[])) or sorted(images)!=sorted(manifest.get('image_components',[]))
+                or sorted(forwards)!=sorted(manifest.get('forward_components',[]))):
             raise PublishRejected('selection_manifest_mismatch')
 
     @staticmethod
@@ -54,31 +67,38 @@ class Publisher:
         markers=('missing','limit','timeout','cycle','unavailable','rejected','invalid','unsupported','expired','transport_error','cq_string','embedded_reply','unverified','not_authorized')
         return next((issue for issue in bundle.issues if any(word in issue for word in markers)),None)
 
-    def _segments(self,bundle,settings):
+    def _records(self,bundle,settings):
         media={m.path:m for m in bundle.media if m.path}
-        segments=[]
+        records=[]
         for message in bundle.messages:
+            if message.ref.key in bundle.forwards:
+                records.append(({'type':'forward_original','data':{
+                    'account_id':message.ref.account_id,'group_id':message.ref.group_id,
+                    'message_id':message.ref.message_id}},0))
+                continue
             content=[]
             for segment in message.segments:
                 kind=segment.get('type'); data=segment.get('data',{})
-                if kind == 'text': content.append({'type':'text','data':{'text':str(data.get('text',''))}})
+                if kind == 'text': content.append(({'type':'text','data':{'text':str(data.get('text',''))}},0))
                 elif kind == 'at': raise PublishRejected('mention_not_publishable')
                 elif kind == 'reply': continue
                 elif kind == 'image':
                     path=str(data.get('file','')); image=media.get(path)
                     if image is None or image.expires_at <= self.clock() or not Path(path).is_file(): raise PublishRejected('media_unavailable')
                     if image.size > settings.data['media']['max_image_bytes']: raise PublishRejected('image_size_limit')
-                    content.append({'type':'image','data':{'file':path}})
+                    content.append(({'type':'image','data':{'file':path}},image.size))
                 elif kind in {'forward','node'}:
                     continue
                 else: raise PublishRejected('unsupported_segment')
             if content:
-                if segments and content[0]['type']=='text':
-                    content[0]['data']['text']='\n'+content[0]['data']['text']
-                for segment in content:
-                    amount=media[segment['data']['file']].size if segment['type']=='image' else 0
-                    segments.append((segment,amount))
-        return segments
+                records.append(({'type':'node','data':{'user_id':message.user_id,
+                    'nickname':message.nickname or message.user_id,'time':int(message.occurred_at),
+                    'content':content}},sum(amount for _,amount in content)))
+        return records
+
+    @staticmethod
+    def _segment_count(nodes):
+        return sum(len(node['data']['content']) if node.get('type')=='node' else 1 for node in nodes)
 
     def enqueue(self,bundle:ContentBundle,target:str,analysis:AgentResult):
         settings=self.settings_provider(); self._eligible(bundle,target,analysis,settings)
@@ -88,10 +108,11 @@ class Publisher:
         rows=[]
         for index,(nodes,media_bytes) in enumerate(chunks):
             nodes=copy.deepcopy(nodes)
-            estimated=len(canonical(nodes).encode())+4*math.ceil(media_bytes/3)+512*len(nodes)
+            count=self._segment_count(nodes)
+            estimated=len(canonical(nodes).encode())+4*math.ceil(media_bytes/3)+512*count
             row={'delivery_id':digest([bundle.sources[0].account_id,target,bundle.fingerprint,index]),
                  'account_id':bundle.sources[0].account_id,'group_id':target,'bundle_id':bundle.bundle_id,'fingerprint':bundle.fingerprint,
-                 'part_index':index,'part_total':len(chunks),'nodes':nodes,'node_count':len(nodes),'estimated_bytes':estimated,
+                 'part_index':index,'part_total':len(chunks),'nodes':nodes,'node_count':count,'estimated_bytes':estimated,
                  'expires_at':bundle.expires_at,'created_at':self.clock(),'tags':analysis.tags}
             rows.append(row)
         if hasattr(self.store,'enqueue_deliveries'):
@@ -102,18 +123,60 @@ class Publisher:
 
     def _chunks(self,bundle,settings):
         max_nodes=settings.data['limits']['max_message_segments']; max_bytes=settings.data['limits']['max_batch_media_bytes']
-        chunks=[]; chunk=[]; size=0
-        for node,amount in self._segments(bundle,settings):
-            if amount > max_bytes: raise PublishRejected('record_media_size_limit')
-            if chunk and (len(chunk)>=max_nodes or size+amount>max_bytes): chunks.append((chunk,size)); chunk=[]; size=0
-            chunk.append(node); size+=amount
-        if chunk: chunks.append((chunk,size))
+        chunks=[]; records=[]
+        def flush():
+            if not records: return
+            merged=len(records)>1
+            chunk=[]; size=0; count=0
+            for record,_ in records:
+                fragments=[]; content=[]; amount=0
+                for segment,media_bytes in record['data']['content']:
+                    if media_bytes>max_bytes: raise PublishRejected('record_media_size_limit')
+                    if content and (len(content)>=max_nodes or amount+media_bytes>max_bytes):
+                        fragments.append((content,amount)); content=[]; amount=0
+                    content.append(segment); amount+=media_bytes
+                if content: fragments.append((content,amount))
+                for content,amount in fragments:
+                    if chunk and (count+len(content)>max_nodes or size+amount>max_bytes):
+                        chunks.append((chunk,size)); chunk=[]; size=0; count=0
+                    if merged:
+                        data={**record['data'],'content':content}
+                        chunk.append({'type':'node','data':data})
+                    else: chunk.extend(content)
+                    size+=amount; count+=len(content)
+            if chunk: chunks.append((chunk,size))
+            records.clear()
+        for node,amount in self._records(bundle,settings):
+            if node['type']=='forward_original':
+                flush()
+                chunks.append(([node],0))
+                continue
+            records.append((node,amount))
+        flush()
         if not chunks: raise PublishRejected('empty_bundle')
         return chunks
 
     def _materialize(self,row,bundle,settings):
         nodes=copy.deepcopy(row['nodes']); allowed={m.path:m for m in bundle.media if m.path}
-        for segment in nodes:
+        if len(nodes)==1 and nodes[0].get('type')=='forward_original':
+            # Validate cached inspection evidence; native forwarding uploads no rebuilt media.
+            for media in bundle.media:
+                with Path(media.path).open('rb') as file:
+                    payload=file.read(settings.data['media']['max_image_bytes']+1)
+                if (media.expires_at<=self.clock() or len(payload)!=media.size
+                        or len(payload)>settings.data['media']['max_image_bytes']
+                        or hashlib.sha256(payload).hexdigest()!=media.sha256):
+                    raise PublishRejected('media_invalid')
+            return nodes
+        merged=bool(nodes and nodes[0].get('type')=='node')
+        segments=[]
+        for node in nodes:
+            if merged:
+                if node.get('type')!='node' or not isinstance(node.get('data',{}).get('content'),list):
+                    raise PublishRejected('invalid_message_payload')
+                segments.extend(node['data']['content'])
+            else: segments.append(node)
+        for segment in segments:
             if segment.get('type') not in {'text','image'} or not isinstance(segment.get('data'),dict):
                 raise PublishRejected('invalid_message_payload')
             if segment['type'] != 'image': continue
@@ -163,7 +226,13 @@ class Publisher:
                     if not latest.data['sending']['enabled'] or latest.data['runtime']['mode']!='auto' or self.store.paused(row['account_id'],row['group_id']):
                         raise PublishRejected('paused_or_disabled')
                 before_send()
-                receipt=await self.gateway.send_message(row['group_id'],nodes,before_send=before_send)
+                if len(nodes)==1 and nodes[0]['type']=='forward_original':
+                    from pullshit.contracts import MessageRef
+                    receipt=await self.gateway.forward_message(MessageRef.from_dict(nodes[0]['data']),row['group_id'],before_send=before_send)
+                elif nodes[0]['type']=='node':
+                    receipt=await self.gateway.send_forward(row['group_id'],nodes,before_send=before_send)
+                else:
+                    receipt=await self.gateway.send_message(row['group_id'],nodes,before_send=before_send)
                 from pullshit.contracts import platform_id
                 receipt=platform_id(receipt,True)
             except PublishRejected:

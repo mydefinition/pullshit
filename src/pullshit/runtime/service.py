@@ -92,7 +92,7 @@ class Service:
                 bundle=await self.content.build(refs)
                 if bundle.expires_at<=self.clock() or not bundle.messages: continue
                 text=''.join(str(s.get('data',{}).get('text','')) for m in bundle.messages for s in m.segments if s.get('type')=='text')
-                if not nominated and not bundle.media and len(text.strip())<20 and 'http' not in text: continue
+                if not nominated and not bundle.media and not bundle.forwards and len(text.strip())<20 and 'http' not in text: continue
                 if len(self.store.list_candidates(limit=201,status='collected',now=self.clock()))>=200:
                     self.logger.warning('candidate queue full'); continue
                 if self.store.put_candidate(bundle):
