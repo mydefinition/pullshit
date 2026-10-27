@@ -13,6 +13,8 @@ TOOL_NAMES = ('get_context', 'inspect_image', 'get_group_preferences', 'submit_a
 LLM_REQUEST_MIDDLEWARE = 'llm_request'
 LLM_EXECUTION_MIDDLEWARE = 'llm_execution'
 MAX_PROTOCOL_LINE = 1 << 20
+IMAGE_HTTP_TIMEOUT_SECONDS = 60.0
+IMAGE_TOOL_TIMEOUT_SECONDS = IMAGE_HTTP_TIMEOUT_SECONDS + 5.0
 
 DECISIONS = ('eligible', 'rejected', 'needs_review')
 DIRECTIONS = ('positive', 'negative', 'unknown')

@@ -120,7 +120,8 @@ class Bridge:
 
     def tool_call(self, name: str, arguments: dict) -> dict:
         self.tool_calls += 1
-        reply = self.request({'type': 'tool_call', 'name': name, 'arguments': arguments})
+        timeout = protocol.IMAGE_TOOL_TIMEOUT_SECONDS if name == 'inspect_image' else 30.0
+        reply = self.request({'type': 'tool_call', 'name': name, 'arguments': arguments}, timeout=timeout)
         if reply.get('type') != 'tool_result':
             raise BridgeLost('protocol')
         if 'error' in reply:

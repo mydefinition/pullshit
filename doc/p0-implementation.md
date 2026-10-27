@@ -210,5 +210,13 @@ Python 3.12+，运行环境为 Linux。业务代码位于 [src/pullshit](../src/
 
 部署后生产 ready、依赖、QQ 账号、全部授权群、三个业务进程及模拟接口健康检查通过。私有模型连接、发送与预算配置逐字节保持一致。发行包 SHA-256 为 `2b9f61c6df94a4c997d83e940e258271556435746d91b33637df78487d6b551a`。具体部署时间、进程、配置快照与回滚 wheel 保存在 Git 忽略的 `local/ops/pullshit/run/merged-chat-deployment.json`；测试及实际投递重建证据分别为 `merged-chat-release.json`、`merged-chat-preflight.json`。群内自然投递回读验收统一见[开发 TODO](phase-1-todo.md)。
 
-最后修改时间：2026-10-20T08:01:40Z
+## 2026-10-27 图片请求等待与生产安装验证
+
+使用本机 HTTP 模型服务和真实 Hermes SDK，将图片描述响应延迟 31 秒，验证 HTTP 读取、父进程工具执行及 worker 结果回传均完成，选材返回 eligible，图片检查证据有效，费用结算完整且无剩余预留。图片 HTTP 超时为 60 秒；工具和桥接等待各为 65 秒，角色时限及任务截止时间继续约束执行。超时契约见[配置说明](configuration.md#hermes-worker)。
+
+隔离安装发行包的完整 243 项测试通过（164.973 秒），35 个 Python 模块与源码及生产安装逐字节一致，生产 ready 配置及依赖检查通过。业务、QQ 隧道和模拟接口均为 RUNNING，QQ 账号匹配，全部 6 个来源、2 个目标及 10 个广播组合可用，模拟接口健康状态为 ready。私有配置、自动发送与守护状态保持原值；本次未额外向群发送测试消息或调用真实模型。
+
+发行包 SHA-256 为 `369c1c001f483818161d8e6a361d7081007c00c4407029489d5b26c6ab40482f`。发行、测试日志、安装验证及回滚 wheel 信息保存在 Git 忽略的 `local/ops/pullshit/run/image-timeout-release.json` 和 `image-timeout-deployment.json`；开发及自然消息验收入口见[开发 TODO](phase-1-todo.md)。
+
+最后修改时间：2026-10-27T02:40:38Z
 模型署名：GPT-6

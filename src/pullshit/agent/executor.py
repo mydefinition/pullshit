@@ -378,7 +378,8 @@ class HermesExecutor:
 
     async def _invoke_tool(self, run: _Run, name: str, arguments: dict) -> dict:
         agent_cfg = agent_config(self._settings.data, run.task.kind)
-        timeout = min(float(agent_cfg.get('timeout_seconds', 90)), 30.0)
+        tool_timeout = protocol.IMAGE_TOOL_TIMEOUT_SECONDS if name == 'inspect_image' else 30.0
+        timeout = min(float(agent_cfg.get('timeout_seconds', 90)), tool_timeout)
 
         async def call() -> dict:
             if run.task.kind=='review' and name not in {'inspect_image','submit_analysis'}:
@@ -503,9 +504,12 @@ class HermesExecutor:
         if reservation is None:
             return {'error': 'budget_denied'}
         try:
+            timeout = min(protocol.IMAGE_HTTP_TIMEOUT_SECONDS,
+                          float(agent_cfg.get('timeout_seconds', 90)),
+                          max(0.001, run.task.deadline - self._clock()))
             description = await asyncio.to_thread(
                 vision_describe_image, endpoint, model, api_key, image_bytes, media.mime or '',
-                question, max_tokens, 15.0, session_id=run.task.task_id)
+                question, max_tokens, timeout, session_id=run.task.task_id)
         except VisionError as exc:
             return {'error': exc.code}
         tokens = {key: description.get(key) for key in ('input_tokens', 'output_tokens')}

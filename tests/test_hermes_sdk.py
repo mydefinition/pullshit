@@ -16,7 +16,7 @@ SDK_PYTHON=Path(os.environ.get('PULLSHIT_HERMES_PYTHON',str(Path(__file__).resol
 
 @unittest.skipUnless(SDK_PYTHON.is_file(),'Hermes worker interpreter is required for SDK integration')
 class HermesSdkTests(Workspace):
-    def configure(self,deny=False,image=False,conflicting=False,review=False):
+    def configure(self,deny=False,image=False,conflicting=False,review=False,vision_delay=0):
         self.requests=[]; self.user_agents=[]; self.image=image; self.image_ref=None
         owner=self
         def answer():
@@ -30,6 +30,7 @@ class HermesSdkTests(Workspace):
                 owner.requests.append(body)
                 owner.user_agents.append(self.headers.get('User-Agent'))
                 if body.get('model')=='mock-vision':
+                    time.sleep(vision_delay)
                     raw=json.dumps({'choices':[{'message':{'content':'verified image description'}}],'usage':{'prompt_tokens':20,'completion_tokens':15}}).encode(); self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(raw))); self.end_headers(); self.wfile.write(raw); return
                 main_requests=[request for request in owner.requests if request['model']=='mock-model']
                 if len(main_requests)==1:
@@ -117,6 +118,21 @@ class HermesSdkTests(Workspace):
             result=asyncio.run(HermesExecutor(self.settings,self.store_instance).run(task))
         self.assertEqual(result.decision,'needs_review'); self.assertIn('input_character_limit',result.reason)
         self.assertFalse(self.requests)
+        self.assertFalse(list(self.settings.path('storage','worker_directory').glob('task-*')))
+
+    def test_slow_image_response_reaches_real_worker_and_settles_usage(self):
+        task=self.configure(image=True,vision_delay=31)
+        self.settings.data['agent']['timeout_seconds']=90
+        task.deadline=time.time()+90
+        with patch.dict(os.environ,{'PULLSHIT_AGENT_API_KEY':'test-only-token','PULLSHIT_VISION_API_KEY':'test-vision-token'}):
+            result=asyncio.run(HermesExecutor(self.settings,self.store_instance).run(task))
+        self.assertEqual(result.decision,'eligible',result.reason)
+        self.assertEqual(result.inspected_images,[self.image_ref.reference_id])
+        inspected=json.loads(next(m['content'] for m in self.requests[-1]['messages'] if m['role']=='tool'))
+        self.assertTrue(inspected['ok'])
+        self.assertTrue(result.usage['complete'])
+        day=time.strftime('%Y-%m-%d',time.gmtime())
+        self.assertAlmostEqual(self.store_instance.budget(day,'global','model_usd')['reserved'],0,places=10)
         self.assertFalse(list(self.settings.path('storage','worker_directory').glob('task-*')))
 
     def test_independent_review_uses_real_worker_and_denies_context_and_preferences(self):
